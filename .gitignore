@@ -174,4 +174,4 @@ multirun/
 CUB_200_2011/
 scbm_implementation_venv/
 class_attr_data_10/
-*.pth
+*.pth*.pth
