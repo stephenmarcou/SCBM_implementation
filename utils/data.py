@@ -77,7 +77,6 @@ def get_data(config_base, config, gen):
         )
     else:
         NotImplementedError("ERROR: Dataset not supported!")
-
     config = config_base
     train_loader = DataLoader(
         trainset,

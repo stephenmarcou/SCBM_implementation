@@ -54,7 +54,14 @@ def train(config):
     gen = reset_random_seeds(config.seed)
 
     # Setting device on GPU if available, else CPU
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
+    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Additional info when using cuda
     if device.type == "cuda":

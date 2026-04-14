@@ -12,6 +12,8 @@ from torchmin import minimize
 from tqdm import tqdm
 import wandb
 
+import numpy as np
+
 from utils.minimize_constraint import minimize_constr
 from utils.utils import numerical_stability_check
 
@@ -44,7 +46,8 @@ def intervene_scbm(
     model.eval()
     policies = config.model.inter_policy.split(",")
     strategies = config.model.inter_strategy.split(",")
-    num_interventions = min(200, config.data.num_concepts)
+    # I changed from min(config.data.num_concepts, 200)
+    num_interventions = min(config.data.num_concepts, config.model.max_interventions)
 
     # Intervening with different strategies
     first_intervention = True
@@ -90,8 +93,13 @@ def intervene_scbm(
 
                     # Store predictions
                     concepts_pred_probs = concepts_mcmc_probs.mean(-1)
-                    triang_cov = triang_cov.to(torch.float64)
-                    c_mu = mu.to(torch.float64)
+                    # I changed
+                    if device.type == "mps":  # MPS backend has issues with double precision
+                        triang_cov = triang_cov.to(torch.float32)
+                        c_mu = mu.to(torch.float32)
+                    else:
+                        triang_cov = triang_cov.to(torch.float64)
+                        c_mu = mu.to(torch.float64)
                     c_cov = torch.matmul(
                         triang_cov,
                         torch.transpose(triang_cov, dim0=1, dim1=2),
@@ -618,6 +626,7 @@ class RandomSubsetInterventionPolicy:
                           Shape: (batch_size, num_concepts)
         """
         num_noninterv_concepts = concepts_mask.shape[1] - concepts_mask.sum(1)[0]
+        num_noninterv_concepts = int(num_noninterv_concepts.item()) # I changed
         interv_indices = torch.randint(
             low=0,
             high=num_noninterv_concepts,
@@ -820,6 +829,10 @@ class SCBM_Strategy:
 
             # Compute mu and covariance conditioned on intervened-on concepts
             # Intermediate steps
+            
+            # I changed
+            num_intervened = int(num_intervened.item())            
+            
             perm_intermediate_cov = torch.matmul(
                 perm_cov[:, num_intervened:, :num_intervened],
                 torch.inverse(perm_cov[:, :num_intervened, :num_intervened]),
@@ -1012,12 +1025,15 @@ class ConfIntervalOptimalStrategy:
         # Note, theta^ is = mu, evaluated for the N(mu,Sigma) distribution, while theta is point on the boundary of the confidence region
         # Then, we make theta by arg min Concept BCE(θ) s.t. Λn(θ) <= holds with 1-α = self.level for theta~N(0,Sigma) (not fully correct explanation, but intuition).
         n_intervened = c_mask.sum(1)[0]
+        n_intervened = int(n_intervened.item()) # I changed
+        
         # Separate intervened-on concepts from others
         indices = torch.argsort(c_mask, dim=1, descending=True, stable=True)
         perm_cov = c_cov.gather(1, indices.unsqueeze(2).expand(-1, -1, c_cov.size(2)))
         perm_cov = perm_cov.gather(
             2, indices.unsqueeze(1).expand(-1, c_cov.size(1), -1)
         )
+        
         marginal_interv_cov = perm_cov[:, :n_intervened, :n_intervened]
         marginal_interv_cov = numerical_stability_check(
             marginal_interv_cov.float(), device=marginal_interv_cov.device
@@ -1030,7 +1046,8 @@ class ConfIntervalOptimalStrategy:
             .float()
             .cpu()
         )  # direction
-        quantile_cutoff = chi2.ppf(q=self.level, df=n_intervened.cpu())
+        quantile_cutoff = chi2.ppf(q=self.level, df=n_intervened) # I changed from n_intervened.cpu()
+        quantile_cutoff = chi2.ppf(q=self.level, df=n_intervened) # I changed from n_intervened.cpu()
 
         # Finding good init point on confidence region boundary (each dim with equal magnitude)
         dist = MultivariateNormal(torch.zeros(n_intervened), marginal_interv_cov)
@@ -1101,9 +1118,16 @@ class ConfIntervalOptimalStrategy:
 
             # Wrapper for scipy "minimize" function
             # Find intervention logits by minimizing the concept BCE s.t. they still lie on the boundary of the confidence region
+            
+            # I changed
+            x0_i = x0[i].detach().cpu().double() #x0[i]
+            lb_interv_i = lb_interv[i].detach().cpu().double() #lb_interv[i]
+            ub_interv_i = ub_interv[i].detach().cpu().double() #ub_interv[i]
+            
+            
             minimum = minimize_constr(
                 f=loglikeli_bern_uni,
-                x0=x0[i],
+                x0=x0_i,
                 jac=jac_min_fct,
                 method="SLSQP",
                 constr={
@@ -1112,10 +1136,11 @@ class ConfIntervalOptimalStrategy:
                     "ub": float("inf"),
                     "jac": jac_constraint,
                 },
-                bounds={"lb": lb_interv[i], "ub": ub_interv[i]},
+                bounds={"lb": lb_interv_i, "ub": ub_interv_i},
                 max_iter=50,
-                tol=1e-4 * n_intervened.cpu(),
+                tol=1e-4 * n_intervened,
             )
+            # I changed from n_intervened.cpu()
             interv_vector[i] = minimum.x
 
         # Permute intervened concept logits back into original order

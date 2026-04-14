@@ -219,9 +219,15 @@ class CUB_DatasetGenerator(Dataset):
             if self.cache:
                 self._cache_image(index, image_data, image_attr, image_label)
         
+        image_attr = image_attr.astype(np.float32)  # Ensure attributes are float32 for model compatibility
+        
         if self.transform is not None: 
             image_data = self.transform(image_data) 
- 
+            
+
+
+        
+        
         # Return a tuple of images, labels, and protected attributes 
         return { 
             "img_code": index, 
@@ -245,7 +251,7 @@ def train_test_split_CUB(root_dir):
         pickle.load(
             open(
                 os.path.join(
-                    root_dir, "CUB/CUB_processed/class_attr_data_10/train.pkl"
+                    root_dir, "CUB/class_attr_data_10/train.pkl"
                 ),
                 "rb",
             )
@@ -254,7 +260,7 @@ def train_test_split_CUB(root_dir):
     data_val.extend(
         pickle.load(
             open(
-                os.path.join(root_dir, "CUB/CUB_processed/class_attr_data_10/val.pkl"),
+                os.path.join(root_dir, "CUB/class_attr_data_10/val.pkl"),
                 "rb",
             )
         )
@@ -262,7 +268,7 @@ def train_test_split_CUB(root_dir):
     data_test.extend(
         pickle.load(
             open(
-                os.path.join(root_dir, "CUB/CUB_processed/class_attr_data_10/test.pkl"),
+                os.path.join(root_dir, "CUB/class_attr_data_10/test.pkl"),
                 "rb",
             )
         )
@@ -274,7 +280,7 @@ def train_test_split_CUB(root_dir):
             end_path = "/".join(parts[index:])
 
             dataset[i]["img_path"] = os.path.join(
-                root_dir, "CUB/CUB_200_2011/", end_path
+                root_dir, "CUB/CUB_200_2011/CUB_200_2011/", end_path
             )
 
     return data_train, data_val, data_test
@@ -282,7 +288,6 @@ def train_test_split_CUB(root_dir):
 
 def get_CUB_dataloaders(config):
     """Returns a dictionary of data loaders for the CUB dataset, for the training, validation, and test sets."""
-
     train_imgs, val_imgs, test_imgs = train_test_split_CUB(
         root_dir=config.data_path,
     )

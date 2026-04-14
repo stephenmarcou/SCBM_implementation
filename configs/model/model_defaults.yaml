@@ -24,3 +24,6 @@ t_epochs: 100 # Number of epochs for second stage training in sequential & indep
 # MCMC
 num_monte_carlo: 100 # Number of MC samples when drawing from concept distribution
 straight_through: True # If Gumbel-Softmax, whether to do straight-through or not [True, False]
+
+# Intervention 
+max_interventions: 200 # I added

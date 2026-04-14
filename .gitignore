@@ -171,7 +171,7 @@ multirun/
 
 
 ### I added
-CUB_200_2011/
+datasets/CUB/*
 scbm_implementation_venv/
 class_attr_data_10/
 *.pth*.pth
