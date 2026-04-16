@@ -51,6 +51,8 @@ class CUB_DatasetGenerator(Dataset):
         self.data = data_pkl 
         self.transform = transform 
         self.cache = cache
+        self.cache_hits = 0
+        self.cache_misses = 0
 
         num_samples = len(data_pkl) 
         
@@ -209,8 +211,14 @@ class CUB_DatasetGenerator(Dataset):
     def __getitem__(self, index): 
         # Check if already cached
         if self._is_cached(index):
+            self.cache_hits += 1
+            if self.cache_hits % 1000 == 0:
+                print(f"[CACHE HIT] {self.cache_hits} hits")
             image_data, image_attr, image_label = self._get_cached_image(index)
         else: 
+            self.cache_misses += 1
+            if self.cache_misses % 1000 == 0:
+                print(f"[CACHE MISS] {self.cache_misses} misses")
             img_data = self.data[index] 
             img_path = img_data["img_path"] 
             image_data = Image.open(img_path).convert("RGB") 
