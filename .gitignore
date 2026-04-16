@@ -175,3 +175,7 @@ datasets/CUB/*
 scbm_implementation_venv/
 class_attr_data_10/
 *.pth*.pth
+pretrained_networks/*
+test.ipynb
+requirements_scbm.txt
+requirements_scbm_relaxed.txt

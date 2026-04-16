@@ -6,3 +6,4 @@ defaults:
 dataset: 'CUB' # Name of the dataset
 num_classes: 200 # Number of the classes of the target variable
 num_concepts: 112 # Number of concepts in dataset
+pkl_file_dir: 'class_attr_data_10/' # Directory of the pkl files containing the data (relative to data_path)

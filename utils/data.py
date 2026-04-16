@@ -32,7 +32,7 @@ def get_data(config_base, config, gen):
     hostname = os.uname()[1]
     if "biomed" in hostname:
         # Remote Datafolder for our group cluster
-        config.data_path = "/cluster/dataset/vogtlab/Projects/CBM/"
+        config.data_path = "/cluster/home/smarcou/work/CUB_Data/"
     elif "data_path" not in config:
         # Local Datafolder if not already specified in yaml
         config.data_path = "../datasets/"
@@ -127,6 +127,7 @@ def get_empirical_covariance(dataloader):
     for batch in dataloader:
         concepts = batch["concepts"]
         data.append(concepts)
+    print(f"First concept batch: {data[0]}")  # Print the first batch of concepts to check the data format
     data = torch.cat(data)  # Concatenate all data into a single tensor
     data_logits = torch.logit(0.05 + 0.9 * data)
     covariance = torch.cov(data_logits.transpose(0, 1))

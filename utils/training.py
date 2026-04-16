@@ -15,7 +15,7 @@ from utils.plotting import compute_and_plot_heatmap
 
 
 def train_one_epoch_scbm(
-    train_loader, model, optimizer, mode, metrics, epoch, config, loss_fn, device
+    train_loader, model, optimizer, mode, metrics, epoch, config, loss_fn, device, log_file = None
 ):
     """
     Train the Stochastic Concept Bottleneck Model (SCBM) for one epoch.
@@ -112,12 +112,16 @@ def train_one_epoch_scbm(
     for key, value in metrics_dict.items():
         prints += f"{key}: {value:.3f} "
     print(prints)
+    
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(prints + "\n")
     metrics.reset()
     return
 
 
 def train_one_epoch_cbm(
-    train_loader, model, optimizer, mode, metrics, epoch, config, loss_fn, device
+    train_loader, model, optimizer, mode, metrics, epoch, config, loss_fn, device, log_file=None
 ):
     """
     Train a baseline method for one epoch.
@@ -212,6 +216,9 @@ def train_one_epoch_cbm(
     for key, value in metrics_dict.items():
         prints += f"{key}: {value:.3f} "
     print(prints)
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(prints + "\n")
     metrics.reset()
     return
 
@@ -226,6 +233,7 @@ def validate_one_epoch_scbm(
     device,
     test=False,
     concept_names_graph=None,
+    log_file=None
 ):
     """
     Validate the Stochastic Concept Bottleneck Model (SCBM) for one epoch.
@@ -318,6 +326,11 @@ def validate_one_epoch_scbm(
         prints = f"Test: "
     for key, value in metrics_dict.items():
         prints += f"{key}: {value:.3f} "
+    
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(prints + "\n")
+    
     print(prints)
     print()
     metrics.reset()
@@ -334,6 +347,7 @@ def validate_one_epoch_cbm(
     device,
     test=False,
     concept_names_graph=None,
+    log_file=None
 ):
     """
     Validate a baseline method for one epoch.
@@ -409,6 +423,11 @@ def validate_one_epoch_cbm(
         prints = f"Test: "
     for key, value in metrics_dict.items():
         prints += f"{key}: {value:.3f} "
+    
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(prints + "\n")
+
     print(prints)
     print()
     metrics.reset()

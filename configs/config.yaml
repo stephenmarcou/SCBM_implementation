@@ -5,8 +5,16 @@ seed: 0 # Random seed
 workers: 2 # Number of workers for data loading
 save_model: False # Whether to save the model. Set to True for inspecting models post training [True, False]
 train_only: False # Whether to train the model only and exit before performing interventions [True, False]
+incomplete: False
+run_inference: False
+run_interventions: False
+num_attribute_groups_remove: 14 # Number of attribute groups to remove when creating incomplete datasets. Only used if incomplete is True. Should be between 0 and 28 for CUB.
+
 
 logging:
   project: 'SCBM' # Name of the wandb project
   mode: 'disabled' # Whether to log to wandb [online, offline, disabled]
   entity: "your_entity" # Your wandb entity
+
+inference:
+  ex_name: null

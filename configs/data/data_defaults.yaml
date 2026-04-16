@@ -1,1 +1,2 @@
 data_path: 'datasets/'  # Directory of data
+incomplete_dir: 'incomplete_data/' # Directory of incomplete data (relative to data_path)

@@ -31,6 +31,7 @@ from utils.training import (
     Custom_Metrics,
 )
 from utils.utils import reset_random_seeds
+from datasets.CUB_dataset import create_random_incomplete_dataset
 
 
 def train(config):
@@ -70,14 +71,31 @@ def train(config):
         print("No GPU available")
 
     # Set paths
-    timestr = time.strftime("%Y%m%d-%H%M%S")
+    timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
+    # I Changed
+    if config.incomplete:
+        ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
+    else:
+        ex_name = "complete" + ex_name
+    
     experiment_path = (
         Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
     )
+    
+    
+    
     experiment_path.mkdir(parents=True)
     config.experiment_dir = str(experiment_path)
     print("Experiment path: ", experiment_path)
+    
+    # I changed
+    if config.save_model:
+        log_file = join(experiment_path, "log.txt")
+        with open(log_file, "w") as f:
+            pass  # Just to create the log file for this experiment
+    else:
+        log_file = None
 
     # Wandb
     os.environ["WANDB_CACHE_DIR"] = os.path.join(
@@ -233,6 +251,7 @@ def train(config):
                 config,
                 loss_fn,
                 device,
+                log_file=log_file
             )
             lr_scheduler.step()
 
@@ -272,6 +291,7 @@ def train(config):
             config,
             loss_fn,
             device,
+            log_file=log_file
         )
         lr_scheduler.step()
 
@@ -293,6 +313,7 @@ def train(config):
         device,
         test=True,
         concept_names_graph=concept_names_graph,
+        log_file=log_file
     )
 
     if config.train_only:
@@ -309,8 +330,54 @@ def train(config):
     return None
 
 
+
+def pkl_dir_valid(config):
+    full_path_pkl_dir = os.path.join(config.data.data_path, config.data.incomplete_dir, "CUB", config.data.pkl_file_dir)
+    if not os.path.isdir(full_path_pkl_dir):
+        create_random_incomplete_dataset(config.data, config.num_attribute_groups_remove)
+        
+    
+def check_cluster():
+    print("CUDA available:", torch.cuda.is_available())
+
+    if torch.cuda.is_available():
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        print("GPU count:", torch.cuda.device_count())
+    else:
+        print("Using CPU")
+
+
+def update_config_paths(config):
+    hostname = os.uname()[1]
+    # Update paths based on the dataset
+    if "biomed" in hostname:
+        # Remote Datafolder for our group cluster
+        config.data.data_path = "/cluster/home/smarcou/work/CUB_Data/"
+        config.experiment_dir = "/cluster/home/smarcou/work/experiments_scbm/"
+        config.model.model_directory = "/cluster/home/smarcou/work/pretrained_networks/"
+    elif "data_path" not in config.data:
+        # Local Datafolder if not already specified in yaml
+        config.data.data_path = "../datasets/"
+    elif config.data.data_path is None:
+        config.data.data_path = "../datasets/"
+    else:
+        pass
+
+
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(config: DictConfig):
+    #print("Config:", config)
+    if config.incomplete:
+        print("Incomplete run")
+        pkl_dir_valid(config)
+    
+    check_cluster()
+    update_config_paths(config)
+        
+    
+    
     project_dir = Path(__file__).absolute().parent
     print("Project directory:", project_dir)
     print("Config:", config)
