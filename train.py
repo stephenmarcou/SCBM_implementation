@@ -369,12 +369,14 @@ def update_config_paths(config):
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(config: DictConfig):
     #print("Config:", config)
+    
+    check_cluster()
+    update_config_paths(config)
     if config.incomplete:
         print("Incomplete run")
         pkl_dir_valid(config)
     
-    check_cluster()
-    update_config_paths(config)
+ 
         
     
     
