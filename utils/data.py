@@ -29,18 +29,6 @@ def get_data(config_base, config, gen):
     Returns:
         tuple: A tuple containing the training data loader, validation data loader, and test data loader.
     """
-    hostname = os.uname()[1]
-    if "biomed" in hostname:
-        # Remote Datafolder for our group cluster
-        config.data_path = "/cluster/home/smarcou/work/CUB_Data/"
-    elif "data_path" not in config:
-        # Local Datafolder if not already specified in yaml
-        config.data_path = "../datasets/"
-    elif config.data_path is None:
-        config.data_path = "../datasets/"
-    else:
-        pass
-
     if config.dataset == "synthetic":
         print("SYNTHETIC DATASET")
         type = None
