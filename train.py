@@ -352,7 +352,7 @@ def update_config_paths(config):
     # Update paths based on the dataset
     if "biomed" in hostname:
         # Remote Datafolder for our group cluster
-        config.data.data_path = "/cluster/home/smarcou/work/CUB_Data/"
+        config.data.data_path = "/cluster/home/smarcou/work/Data/"
         config.experiment_dir = "/cluster/home/smarcou/work/experiments_scbm/"
         config.model.model_directory = "/cluster/home/smarcou/work/pretrained_networks/"
     elif "data_path" not in config.data:

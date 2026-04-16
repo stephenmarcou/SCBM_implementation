@@ -179,3 +179,8 @@ pretrained_networks/*
 test.ipynb
 requirements_scbm.txt
 requirements_scbm_relaxed.txt
+scbm_implementation/
+.DS_Store
+venv_cluster
+requirements_cluster.txt
+requirements_cluster_relaxed.txt
