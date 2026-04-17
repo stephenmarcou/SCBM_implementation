@@ -19,7 +19,7 @@ from utils.utils import numerical_stability_check
 
 
 def intervene_scbm(
-    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device
+    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None
 ):
     """
     Compute the efficacy of intervening on a model using different intervention strategies and policies for SCBMs.
@@ -44,8 +44,14 @@ def intervene_scbm(
         None
     """
     model.eval()
-    policies = config.model.inter_policy.split(",")
-    strategies = config.model.inter_strategy.split(",")
+    # I changed, change later
+    #policies = config.model.inter_policy.split(",")
+    #strategies = config.model.inter_strategy.split(",")
+    
+    policies = ["random"]
+    strategies = ["conf_interval_optimal"]
+    
+    
     # I changed from min(config.data.num_concepts, 200)
     num_interventions = min(config.data.num_concepts, config.model.max_interventions)
 
@@ -172,6 +178,8 @@ def intervene_scbm(
                 prints += f"{key}: {value:.3f} "
             print(prints)
             print()
+            with open(log_file, "a") as f:
+                f.write(prints + "\n")
             metrics.reset()
 
             ## Computing intervention curves using stored concept predictions
@@ -302,6 +310,11 @@ def intervene_scbm(
                     prints += f"{key}: {value:.3f} "
                 print(prints)
                 print()
+                
+                with open(log_file, "a") as f:
+                    f.write(prints + "\n")
+                
+                
                 metrics.reset()
                 # Updating dataset
                 intervention_dataset = TensorDataset(

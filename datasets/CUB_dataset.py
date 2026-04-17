@@ -447,8 +447,11 @@ def create_random_incomplete_dataset(config_data, num_attribute_groups_remove=1)
             last_digit = folder_name.split("_")[-1]
             if last_digit.isdigit():
                 largest_digit = max(largest_digit, int(last_digit))
-    
-    new_pkl_dir = f"class_attr_data_10_incomplete_{largest_digit + 1}/"
+    hostname = os.uname()[1]
+    if "biomed" in hostname:
+        new_pkl_dir = f"class_attr_data_10_incomplete_{largest_digit + 1}_cluster/"
+    else: 
+        new_pkl_dir = f"class_attr_data_10_incomplete_local_{largest_digit + 1}/"
     new_folder_path = os.path.join(path_to_incomplete_data_folder,
                                    new_pkl_dir)
     os.makedirs(new_folder_path, exist_ok=True)

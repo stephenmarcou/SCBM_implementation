@@ -2,6 +2,7 @@
 
 
 
+import ast
 import os
 
 import hydra
@@ -18,7 +19,7 @@ from utils.utils import reset_random_seeds
 import torch
 from models.models import create_model
 
-def inference(config):
+def run(config):
     # Reproducibility
     gen = reset_random_seeds(config.seed)
 
@@ -44,11 +45,32 @@ def inference(config):
     if not experiment_path.exists():
         raise ValueError(f"Experiment path {experiment_path} does not exist.")
     
+    # Epochs setup, need to check this later
+    if config.model.training_mode == "joint":
+        t_epochs = config.model.j_epochs
+    elif config.model.training_mode in ("sequential", "independent"):
+        c_epochs = config.model.c_epochs
+        t_epochs = config.model.t_epochs
+    if config.model.get("p_epochs") is not None:
+        p_epochs = config.model.p_epochs
+    
+    
+    
+    
     
     # Set up logging
-    log_file = experiment_path / "inference_log.txt"
-    with open(log_file, "w") as f:
-        pass  # Just create an empty log file to start with
+    if config.run_inference == True:
+        log_file_inference = experiment_path / "inference_log.txt"
+        with open(log_file_inference, "w") as f:
+            f.write(f"Inference log for experiment: {experiment_path}\n")
+
+
+    if config.run_interventions == True:
+        log_file = experiment_path / "intervention_log.txt"
+        with open(log_file, "w") as f:
+            f.write(f"Intervention log for experiment: {experiment_path}\n")
+
+
 
     # Wandb
     os.environ["WANDB_CACHE_DIR"] = os.path.join(
@@ -85,6 +107,7 @@ def inference(config):
     # Get concept names for plotting
     concept_names_graph = get_concept_groups(config.data)
     
+    print(config.data.num_concepts)
     model = create_model(config)
     saved_model_path = experiment_path / "model.pth"
     state_dict = torch.load(saved_model_path, map_location=device)
@@ -109,7 +132,6 @@ def inference(config):
             validate_one_epoch = validate_one_epoch_cbm
         else:
             validate_one_epoch = validate_one_epoch_scbm
-        t_epochs = None
 
         print("\nEVALUATION ON THE TEST SET:\n")
         validate_one_epoch(
@@ -122,7 +144,7 @@ def inference(config):
             device,
             test=True,
             concept_names_graph=concept_names_graph,
-            log_file=log_file
+            log_file=log_file_inference
         )
         
 
@@ -135,23 +157,78 @@ def inference(config):
             intervene = intervene_cbm
         else:
             intervene = intervene_scbm
-        t_epochs = None
         # Intervention curves
         print("\nPERFORMING INTERVENTIONS:\n")
         intervene(
-            train_loader, test_loader, model, metrics, t_epochs, config, loss_fn, device
+            train_loader, test_loader, model, metrics, t_epochs, config, loss_fn, device, log_file=log_file
         )
 
     wandb.finish(quiet=True)
     return None
 
 
+def update_pkl_dir_and_num_concepts(config):
+    experiment_path = (
+        Path(config.experiment_dir) / config.model.model / config.data.dataset / config.inference.ex_name
+    )
+    with open(os.path.join(experiment_path, "log.txt"), "r") as f:
+        lines = f.readlines()
+        info_line = lines[0]
+        info_line_dict = ast.literal_eval(info_line)
+        pkl_file_dir = info_line_dict["data"]["pkl_file_dir"]
+        config.data.pkl_file_dir = pkl_file_dir
+        config.data.num_concepts = info_line_dict["data"]["num_concepts"]
+    
+    full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
+    if not os.path.exists(full_path_pkl_dir):
+        raise ValueError(f"Pickle directory {full_path_pkl_dir} does not exist.")
+
+        
+        
+    
+def check_cluster():
+    print("CUDA available:", torch.cuda.is_available())
+
+    if torch.cuda.is_available():
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        print("GPU count:", torch.cuda.device_count())
+    else:
+        print("Using CPU")
+
+
+def update_config_paths(config):
+    hostname = os.uname()[1]
+    # Update paths based on the dataset
+    if "biomed" in hostname:
+        # Remote Datafolder for our group cluster
+        config.data.data_path = "/cluster/home/smarcou/work/Data/"
+        config.experiment_dir = "/cluster/home/smarcou/work/experiments_scbm/"
+        config.model.model_directory = "/cluster/home/smarcou/work/pretrained_networks/"
+    elif "data_path" not in config.data:
+        # Local Datafolder if not already specified in yaml
+        config.data.data_path = "../datasets/"
+    elif config.data.data_path is None:
+        config.data.data_path = "../datasets/"
+    else:
+        pass
+
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(config: DictConfig):
+    check_cluster()
+    update_config_paths(config)
+    if config.incomplete:
+        print("Incomplete run")
+        update_pkl_dir_and_num_concepts(config)
+    
+    
+    
+    
     project_dir = Path(__file__).absolute().parent
     print("Project directory:", project_dir)
     print("Config:", config)
-    inference(config)
+    run(config)
 
 
 if __name__ == "__main__":

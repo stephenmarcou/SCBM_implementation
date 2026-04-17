@@ -106,6 +106,7 @@ class SCBM(nn.Module):
             )
 
             n_features = self.encoder_res.fc.in_features
+            # Removed classification head of resnet and replaced with identity to get intermediate features, ouutput dim 512
             self.encoder_res.fc = Identity()
             self.encoder = nn.Sequential(self.encoder_res)
 
@@ -126,6 +127,7 @@ class SCBM(nn.Module):
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
 
+        # Linear network to predict mu of concept distribution
         self.mu_concepts = nn.Linear(n_features, self.num_concepts, bias=True)
 
         if self.cov_type == "global":
@@ -136,6 +138,7 @@ class SCBM(nn.Module):
             self.sigma_concepts = torch.zeros(
                 int(self.num_concepts * (self.num_concepts + 1) / 2)
             )
+        # Linear network to predict sigma of concept distribution (lower triangle of covariance matrix in logit space)
         else:
             self.sigma_concepts = nn.Linear(
                 n_features,
@@ -155,6 +158,7 @@ class SCBM(nn.Module):
         elif self.num_classes > 2:
             self.pred_dim = self.num_classes
 
+        # Final target predictor head 
         if self.head_arch == "linear":
             fc_y = nn.Linear(self.num_concepts, self.pred_dim)
             self.head = nn.Sequential(fc_y)
@@ -232,6 +236,7 @@ class SCBM(nn.Module):
             c_mcmc = torch.bernoulli(c_mcmc_prob)
         elif self.training_mode == "independent":
             c_mcmc = c_true.unsqueeze(-1).repeat(1, 1, self.num_monte_carlo).float()
+        # Joint
         else:
             # Backpropagation necessary
             curr_temp = self.compute_temperature(epoch)
