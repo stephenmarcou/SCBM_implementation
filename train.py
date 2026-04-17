@@ -93,7 +93,7 @@ def train(config):
     if config.save_model:
         log_file = join(experiment_path, "log.txt")
         with open(log_file, "w") as f:
-            pass  # Just to create the log file for this experiment
+            f.write(str(config) + "\n\n")  # Log the config at the beginning of the log file
     else:
         log_file = None
 
@@ -334,7 +334,10 @@ def train(config):
 def pkl_dir_valid(config):
     full_path_pkl_dir = os.path.join(config.data.data_path, config.data.incomplete_dir, "CUB", config.data.pkl_file_dir)
     if not os.path.isdir(full_path_pkl_dir):
-        create_random_incomplete_dataset(config.data, config.num_attribute_groups_remove)
+        new_pkl_dir, num_attributes_remaining =create_random_incomplete_dataset(config.data, config.num_attribute_groups_remove)
+        config.data.pkl_file_dir = new_pkl_dir
+        config.data.num_concepts = num_attributes_remaining
+        
         
     
 def check_cluster():
@@ -377,9 +380,6 @@ def main(config: DictConfig):
         pkl_dir_valid(config)
     
  
-        
-    
-    
     project_dir = Path(__file__).absolute().parent
     print("Project directory:", project_dir)
     print("Config:", config)

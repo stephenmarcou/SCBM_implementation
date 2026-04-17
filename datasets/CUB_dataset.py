@@ -212,12 +212,12 @@ class CUB_DatasetGenerator(Dataset):
         # Check if already cached
         if self._is_cached(index):
             self.cache_hits += 1
-            if self.cache_hits % 1000 == 0:
+            if self.cache_hits % 2000 == 0:
                 print(f"[CACHE HIT] {self.cache_hits} hits")
             image_data, image_attr, image_label = self._get_cached_image(index)
         else: 
             self.cache_misses += 1
-            if self.cache_misses % 1000 == 0:
+            if self.cache_misses % 2000 == 0:
                 print(f"[CACHE MISS] {self.cache_misses} misses")
             img_data = self.data[index] 
             img_path = img_data["img_path"] 
@@ -250,18 +250,29 @@ class CUB_DatasetGenerator(Dataset):
         return len(self.data)
 
 
-def train_test_split_CUB(config):
+def train_test_split_CUB(config, incomplete):
     """Performs train-validation-test split for the CUB dataset"""
 
     # Using pre-determined split as to have different photographers in train & test
     data_train = []
     data_val = []
     data_test = []
+    
+    if not incomplete:
+        full_train_pkl_path = os.path.join(config.data_path, "CUB", "class_attr_data_10", "train.pkl")
+        full_val_pkl_path = os.path.join(config.data_path, "CUB", "class_attr_data_10", "val.pkl")
+        full_test_pkl_path = os.path.join(config.data_path, "CUB", "class_attr_data_10", "test.pkl")
+    else:
+        full_train_pkl_path = os.path.join(config.data_path, "CUB", "incomplete_data", config.pkl_file_dir, "train.pkl")
+        full_val_pkl_path = os.path.join(config.data_path, "CUB", "incomplete_data", config.pkl_file_dir, "val.pkl")
+        full_test_pkl_path = os.path.join(config.data_path, "CUB", "incomplete_data", config.pkl_file_dir, "test.pkl")
+        print(f"Using incomplete dataset with pkl files from {config.pkl_file_dir}")
+
     data_train.extend(
         pickle.load(
             open(
                 os.path.join(
-                    config.data_path, "CUB", config.pkl_file_dir, "train.pkl"
+                    full_train_pkl_path
                 ),
                 "rb",
             )
@@ -270,7 +281,7 @@ def train_test_split_CUB(config):
     data_val.extend(
         pickle.load(
             open(
-                os.path.join(config.data_path, "CUB", config.pkl_file_dir, "val.pkl"),
+                os.path.join(full_val_pkl_path),
                 "rb",
             )
         )
@@ -278,7 +289,7 @@ def train_test_split_CUB(config):
     data_test.extend(
         pickle.load(
             open(
-                os.path.join(config.data_path, "CUB", config.pkl_file_dir, "test.pkl"),
+                os.path.join(full_test_pkl_path),
                 "rb",
             )
         )
@@ -296,10 +307,10 @@ def train_test_split_CUB(config):
     return data_train, data_val, data_test
 
 
-def get_CUB_dataloaders(config):
+def get_CUB_dataloaders(config, incomplete):
     """Returns a dictionary of data loaders for the CUB dataset, for the training, validation, and test sets."""
     train_imgs, val_imgs, test_imgs = train_test_split_CUB(
-        config
+        config, incomplete
     )
 
     # Following the transformations from CBM paper
@@ -423,6 +434,7 @@ def create_random_incomplete_dataset(config_data, num_attribute_groups_remove=1)
         
     print(f"Removing attribute groups: {remove_attribute_parts} with attribute indices: {remove_attribute_indices}")
     
+    num_attributes_remaining = config_data.num_concepts - len(remove_attribute_indices)
     
     path_to_incomplete_data_folder = os.path.join(config_data.data_path, "CUB", config_data.incomplete_dir)
     os.makedirs(path_to_incomplete_data_folder, exist_ok=True)
@@ -436,8 +448,9 @@ def create_random_incomplete_dataset(config_data, num_attribute_groups_remove=1)
             if last_digit.isdigit():
                 largest_digit = max(largest_digit, int(last_digit))
     
+    new_pkl_dir = f"class_attr_data_10_incomplete_{largest_digit + 1}/"
     new_folder_path = os.path.join(path_to_incomplete_data_folder,
-                                   f"class_attr_data_10_incomplete_{largest_digit + 1}/")
+                                   new_pkl_dir)
     os.makedirs(new_folder_path, exist_ok=True)
     
     # Create mapping from old attribute indices to new attribute indices after removal, for info.txt
@@ -472,3 +485,5 @@ def create_random_incomplete_dataset(config_data, num_attribute_groups_remove=1)
         with open(new_pkl_path, "wb") as f:
             pickle.dump(data, f)
         print(f"Saved modified {pkl_file} to {new_pkl_path}")
+
+    return new_pkl_dir, num_attributes_remaining

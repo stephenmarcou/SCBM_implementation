@@ -273,7 +273,6 @@ def validate_one_epoch_scbm(
                 "labels"
             ].to(device)
             concepts_true = batch["concepts"].to(device)
-
             concepts_mcmc_probs, triang_cov, target_pred_logits = model(
                 batch_features, epoch, validation=True, c_true=concepts_true
             )
@@ -293,7 +292,9 @@ def validate_one_epoch_scbm(
 
                 except:
                     pass
-
+            
+            
+            
             target_loss, concepts_loss, prec_loss, total_loss = loss_fn(
                 concepts_mcmc_probs,
                 concepts_true,

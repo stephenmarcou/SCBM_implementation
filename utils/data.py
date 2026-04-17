@@ -51,7 +51,7 @@ def get_data(config_base, config, gen):
     elif config.dataset == "CUB":
         print("CUB DATASET")
         trainset, validset, testset = get_CUB_dataloaders(
-            config,
+            config, config_base.incomplete
         )
     elif config.dataset == "cifar10":
         print("CIFAR-10 DATASET")
