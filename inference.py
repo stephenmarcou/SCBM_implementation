@@ -176,6 +176,7 @@ def update_pkl_dir_and_num_concepts(config):
         info_line = lines[0]
         info_line_dict = ast.literal_eval(info_line)
         pkl_file_dir = info_line_dict["data"]["pkl_file_dir"]
+        pkl_file_dir = pkl_file_dir.strip("/")
         config.data.pkl_file_dir = pkl_file_dir
         config.data.num_concepts = info_line_dict["data"]["num_concepts"]
     

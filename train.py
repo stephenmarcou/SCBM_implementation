@@ -9,6 +9,7 @@ from pathlib import Path
 import time
 import uuid
 
+import pickle
 import torch
 import torch.optim as optim
 import hydra
@@ -333,11 +334,15 @@ def train(config):
 
 
 def pkl_dir_valid(config):
-    full_path_pkl_dir = os.path.join(config.data.data_path, config.data.incomplete_dir, "CUB", config.data.pkl_file_dir)
+    full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", config.data.incomplete_dir, config.data.pkl_file_dir)
     if not os.path.isdir(full_path_pkl_dir):
         new_pkl_dir, num_attributes_remaining =create_random_incomplete_dataset(config.data, config.num_attribute_groups_remove)
         config.data.pkl_file_dir = new_pkl_dir
         config.data.num_concepts = num_attributes_remaining
+    else:
+        train_path = os.path.join(full_path_pkl_dir, "train.pkl")
+        train_data = pickle.load(open(train_path, "rb"))
+        config.data.num_concepts = len(train_data[0]["attribute_label"])
         
         
     
