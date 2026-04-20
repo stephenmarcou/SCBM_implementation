@@ -29,6 +29,8 @@ from utils.training import (
     train_one_epoch_scbm,
     validate_one_epoch_cbm,
     validate_one_epoch_scbm,
+    train_one_epoch_scbm_residual,
+    validate_one_epoch_scbm_residual,
     Custom_Metrics,
 )
 from utils.utils import reset_random_seeds
@@ -170,10 +172,14 @@ def train(config):
         validate_one_epoch = validate_one_epoch_cbm
         train_one_epoch = train_one_epoch_cbm
         intervene = intervene_cbm
-    else:
+    elif config.model.model == "scbm":
         validate_one_epoch = validate_one_epoch_scbm
         train_one_epoch = train_one_epoch_scbm
         intervene = intervene_scbm
+    else:
+        validate_one_epoch = validate_one_epoch_scbm_residual
+        train_one_epoch = train_one_epoch_scbm_residual
+        
 
     print(
         "TRAINING "
