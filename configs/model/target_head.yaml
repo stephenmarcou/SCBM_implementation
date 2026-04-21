@@ -1,0 +1,7 @@
+defaults: 
+  - model_defaults # Inherit model_defaults arguments
+
+# --------------------------
+#         Model
+# --------------------------
+model: "linear_head" 

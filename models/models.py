@@ -36,6 +36,12 @@ def create_model(config):
 
 
 
+
+
+
+
+
+
 class SCBM(nn.Module):
     """
     Stochastic Concept Bottleneck Model (SCBM) with Learned Covariance Matrix.
@@ -526,6 +532,8 @@ class SCBM_residual(nn.Module):
         )  # [batch_size,num_concepts,mcmc_size]
         c_res_mcmc_prob = self.act_c(c_res_mcmc_logit)
 
+        
+        
         # For all MCMC samples simultaneously sample from Bernoulli
         if validation or self.training_mode == "sequential":
             # No backpropagation necessary
@@ -569,6 +577,8 @@ class SCBM_residual(nn.Module):
         # Pick the concept tensor: [B, C, M]
         x = c_res_mcmc_probs if self.concept_learning == "hard" else c_res_mcmc_logits
         B, C, M = x.shape
+        
+        
 
         # Run the head over all M samples at once: reshape to [B*M, C]
         x_flat = x.permute(0, 2, 1).reshape(B * M, C)        # [B*M, C]
