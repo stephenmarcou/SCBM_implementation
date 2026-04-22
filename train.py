@@ -356,6 +356,7 @@ def pkl_dir_valid(config):
         config.data.pkl_file_dir = new_pkl_dir
         config.data.num_concepts = num_attributes_remaining
     else:
+        print("Incomplete dataset already exists, using existing pkl file directory: ", config.data.pkl_file_dir)
         train_path = os.path.join(full_path_pkl_dir, "train.pkl")
         train_data = pickle.load(open(train_path, "rb"))
         # In case we are using incomplete dataset, we need to update the number of concepts in the config based on the dataset we are loading
