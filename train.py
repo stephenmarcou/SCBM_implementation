@@ -34,7 +34,7 @@ from utils.training import (
     Custom_Metrics,
 )
 from utils.utils import reset_random_seeds
-from datasets.CUB_dataset import create_random_incomplete_dataset
+from datasets.CUB_dataset import create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
 
 
 def train(config):
@@ -78,8 +78,10 @@ def train(config):
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
     # I Changed
-    if config.incomplete:
+    if config.incomplete and config.remove_attribute_groups:
         ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
+    elif config.incomplete and not config.remove_attribute_groups:
+        ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
     else:
         ex_name = "complete" + ex_name
     
@@ -340,14 +342,23 @@ def train(config):
 
 
 def pkl_dir_valid(config):
-    full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", config.data.incomplete_dir, config.data.pkl_file_dir)
+
+    full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
+
+
     if not os.path.isdir(full_path_pkl_dir):
-        new_pkl_dir, num_attributes_remaining =create_random_incomplete_dataset(config.data, config.num_attribute_groups_remove)
+        if config.remove_attribute_groups:
+            print("Creating new incomplete dataset by removing attribute groups...")
+            new_pkl_dir, num_attributes_remaining = create_random_incomplete_dataset_attr_groups(config.data, config.num_attribute_groups_remove)
+        else:
+            print("Creating new incomplete dataset by removing individual attributes...")
+            new_pkl_dir, num_attributes_remaining = create_random_incomplete_dataset_indiv_attr(config.data, config.ratio_attributes_remove)
         config.data.pkl_file_dir = new_pkl_dir
         config.data.num_concepts = num_attributes_remaining
     else:
         train_path = os.path.join(full_path_pkl_dir, "train.pkl")
         train_data = pickle.load(open(train_path, "rb"))
+        # In case we are using incomplete dataset, we need to update the number of concepts in the config based on the dataset we are loading
         config.data.num_concepts = len(train_data[0]["attribute_label"])
         
         

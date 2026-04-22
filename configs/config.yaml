@@ -9,6 +9,8 @@ incomplete: False
 run_inference: False
 run_interventions: False
 num_attribute_groups_remove: 14 # Number of attribute groups to remove when creating incomplete datasets. Only used if incomplete is True. Should be between 0 and 28 for CUB.
+remove_attribute_groups: False # Whether to create an incomplete dataset by removing entire attribute groups, or by randomly removing individual attributes across groups. Only used if incomplete is True. [True, False]
+ratio_attributes_remove: 0.5 # Ratio of attributes to remove when creating incomplete datasets by randomly removing individual attributes across groups. Only used if incomplete is True and remove_attribute_groups is False. Should be between 0 and 1.
 
 
 logging:

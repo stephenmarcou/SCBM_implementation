@@ -211,6 +211,27 @@ class SCBLoss(nn.Module):
 
         return target_loss, concepts_loss, prec_loss, total_loss
     
+    
+    
+    def compute_concept_loss(self, concepts_mcmc_probs, concepts_true):
+        assert torch.all((concepts_true == 0) | (concepts_true == 1))
+        concepts_true_expanded = concepts_true.unsqueeze(-1).expand_as(
+            concepts_mcmc_probs
+        )
+
+        bce_loss = F.binary_cross_entropy(
+            concepts_mcmc_probs, concepts_true_expanded.float(), reduction="none"
+        )  # [B,C,MCMC]
+        intermediate_concepts_loss = -torch.sum(bce_loss, dim=1)  # [B,MCMC]
+        mcmc_loss = -torch.logsumexp(
+            intermediate_concepts_loss, dim=1
+        )  # [B], logsumexp for numerical stability due to shift invariance
+        # The concept loss computation is bounded by - log_num_mc adding log_num_mc moves
+        # bound to 0. Preventing negative losses.
+        return self.alpha * (torch.mean(mcmc_loss) + self.log_num_mc)
+    
+    
+
 class SCBresLoss(nn.Module):
     """
     Loss function for the Stochastic Concept Bottleneck Model (SCBM).

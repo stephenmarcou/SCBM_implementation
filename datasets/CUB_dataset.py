@@ -421,7 +421,7 @@ def get_attribute_parts_to_indices(config_data):
 
         return semantic_groups
  
-def create_random_incomplete_dataset(config_data, num_attribute_groups_remove=1):
+def create_random_incomplete_dataset_attr_groups(config_data, num_attribute_groups_remove=1):
     # mapping between attribute parts and attribute indices in the new 112 attribute space
     attribute_parts_indices_map = get_attribute_parts_to_indices(config_data)
     
@@ -469,10 +469,12 @@ def create_random_incomplete_dataset(config_data, num_attribute_groups_remove=1)
     # Save info about the removed attribute groups and indices in a txt file in the new folder
     info_txt_path = os.path.join(new_folder_path, "info.txt")
     with open(info_txt_path, "w") as f:
+        f.write(f"Mode: remove attribute groups\n")
         f.write(f"Removed attribute groups: {remove_attribute_parts}\n")
         f.write(f"Removed attribute indices: {sorted(remove_attribute_indices)}\n")
         f.write(f"Number of attribute groups removed: {num_attribute_groups_remove}\n")
         f.write(f"Total number of attributes removed: {len(remove_attribute_indices)}\n")
+        # This is only used if you want to intervene on specific attribute groups and need to know which attribute indices correspond to which groups after the random removal
         f.write(f"New attribute indices mapping: {old_to_new_attr_idx}\n")
     
     # Modify pkl files and save to new folder
@@ -491,4 +493,84 @@ def create_random_incomplete_dataset(config_data, num_attribute_groups_remove=1)
             pickle.dump(data, f)
         print(f"Saved modified {pkl_file} to {new_pkl_path}")
 
+    return new_pkl_dir, num_attributes_remaining
+
+
+def create_random_incomplete_dataset_indiv_attr(config_data, ratio_attributes_remove=0.5):
+    # Randomly select attribute indices to remove
+    num_attributes_remove = int(ratio_attributes_remove * config_data.num_concepts)
+    remove_attribute_indices = random.sample(range(config_data.num_concepts), num_attributes_remove)
+
+    print(f"Removing individual attributes with indices: {remove_attribute_indices}")
+    
+    num_attributes_remaining = config_data.num_concepts - len(remove_attribute_indices)
+    
+    path_to_incomplete_data_folder = os.path.join(config_data.data_path, "CUB", config_data.incomplete_dir)
+    os.makedirs(path_to_incomplete_data_folder, exist_ok=True)
+    
+    # Create new pkl folder
+    largest_digit = 0
+    hostname = os.uname()[1]
+    for folder_name in os.listdir(path_to_incomplete_data_folder):
+        if "class_attr_data_10_incomplete_" in folder_name:
+            last_digit = folder_name.split("_")[-1]
+            if last_digit.isdigit():
+                largest_digit = max(largest_digit, int(last_digit))
+    
+                
+    if "biomed" in hostname:
+        new_pkl_dir = f"class_attr_data_10_incomplete_cluster_indiv_attr_{largest_digit + 1}/"
+    else: 
+        new_pkl_dir = f"class_attr_data_10_incomplete_local_indiv_attr_{largest_digit + 1}/"
+    new_folder_path = os.path.join(path_to_incomplete_data_folder,
+                                   new_pkl_dir)
+    os.makedirs(new_folder_path, exist_ok=True)
+    
+    
+    
+    # Stat on number of attributes removed per semantic group
+    attribute_parts_indices_map = get_attribute_parts_to_indices(config_data)
+    num_concepts_removed_semantic_group = {}
+    for semantic_group, indices in attribute_parts_indices_map.items():
+        for idx in indices:
+            if idx in remove_attribute_indices:
+                if semantic_group not in num_concepts_removed_semantic_group:
+                    num_concepts_removed_semantic_group[semantic_group] = 0
+                num_concepts_removed_semantic_group[semantic_group] += 1
+    
+    # Create mapping from old attribute indices to new attribute indices after removal, for info.txt
+    old_to_new_attr_idx = {}
+    new_idx = 0
+    for old_idx in range(config_data.num_concepts):
+        if old_idx not in remove_attribute_indices:
+            old_to_new_attr_idx[old_idx] = new_idx
+            new_idx += 1
+    
+    # Save info about the removed attribute groups and indices in a txt file in the new folder
+    info_txt_path = os.path.join(new_folder_path, "info.txt")
+    with open(info_txt_path, "w") as f:
+        f.write(f"Mode: remove individual attributes\n")
+        f.write(f"Removed attribute indices: {sorted(remove_attribute_indices)}\n")
+        f.write(f"Number of attributes removed: {num_attributes_remove}\n")
+        f.write(f"Number of attributes removed per semantic group: {num_concepts_removed_semantic_group}\n")
+        # This is only used if you want to intervene on specific attribute groups and need to know which attribute indices correspond to which groups after the random removal
+        f.write(f"Mapping from old to new attribute indices: {old_to_new_attr_idx}\n")
+    
+    
+    # Modify pkl files and save to new folder
+    pkl_files = ["train.pkl", "val.pkl", "test.pkl"]
+    old_folder_path = os.path.join(config_data.data_path, "CUB", "class_attr_data_10")
+    for pkl_file in pkl_files:
+        pkl_path = os.path.join(old_folder_path, pkl_file)
+        data = pickle.load(open(pkl_path, "rb"))
+        
+        for sample in data:
+            sample["attribute_label"] = [
+                v for i, v in enumerate(sample["attribute_label"]) if i not in remove_attribute_indices
+            ]
+        new_pkl_path = os.path.join(new_folder_path, pkl_file)
+        with open(new_pkl_path, "wb") as f:
+            pickle.dump(data, f)    
+        print(f"Saved modified {pkl_file} to {new_pkl_path}")
+        
     return new_pkl_dir, num_attributes_remaining
