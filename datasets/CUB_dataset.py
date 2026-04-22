@@ -551,6 +551,7 @@ def create_random_incomplete_dataset_indiv_attr(config_data, ratio_attributes_re
     with open(info_txt_path, "w") as f:
         f.write(f"Mode: remove individual attributes\n")
         f.write(f"Removed attribute indices: {sorted(remove_attribute_indices)}\n")
+        f.write(f"Ratio of attributes removed: {ratio_attributes_remove}\n")
         f.write(f"Number of attributes removed: {num_attributes_remove}\n")
         f.write(f"Number of attributes removed per semantic group: {num_concepts_removed_semantic_group}\n")
         # This is only used if you want to intervene on specific attribute groups and need to know which attribute indices correspond to which groups after the random removal

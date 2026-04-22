@@ -23,8 +23,10 @@ def create_model(config):
         print("Could not create model with name ", config.model, "!")
         quit()
     if config.model.model == "cbm":
+        print("Using CBM model!")
         model = CBM(config)
     elif config.model.model == "scbm":
+        print("Using SCBM model!")
         model = SCBM(config)
     elif config.model.model == "scbm_residual":
         print("Using residual model!")
