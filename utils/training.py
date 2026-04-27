@@ -72,6 +72,7 @@ def train_one_epoch_scbm_residual(
             batch_features, epoch, c_true=concepts_true
         )
         
+        
         concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
 
         # Backward pass depends on the training mode of the model
@@ -766,7 +767,7 @@ class Custom_Metrics(Metric):
         cov_norm: torch.Tensor = None,
         prec_loss: torch.Tensor = None,
     ):
-        assert c_true.shape == c_pred_probs.shape
+        assert c_true.shape == c_pred_probs.shape, f"Shape of true concepts {c_true.shape} and predicted concept probabilities {c_pred_probs.shape} must be the same."
 
         n_samples = y_true.size(0)
         self.ce = nn.CrossEntropyLoss()

@@ -13,7 +13,7 @@ import wandb
 
 from models.losses import create_loss
 from utils.data import get_concept_groups, get_data
-from utils.intervention import intervene_cbm, intervene_scbm
+from utils.intervention import intervene_cbm, intervene_scbm, intervene_scbm_residual
 from utils.training import Custom_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm
 from utils.utils import reset_random_seeds
 import torch
@@ -155,8 +155,10 @@ def run(config):
     if config.run_interventions == True:
         if config.model.model == "cbm":
             intervene = intervene_cbm
-        else:
+        elif config.model.model == "scbm":
             intervene = intervene_scbm
+        else:
+            intervene = intervene_scbm_residual
         # Intervention curves
         print("\nPERFORMING INTERVENTIONS:\n")
         intervene(
@@ -179,6 +181,8 @@ def update_pkl_dir_and_num_concepts(config):
         pkl_file_dir = pkl_file_dir.strip("/")
         config.data.pkl_file_dir = pkl_file_dir
         config.data.num_concepts = info_line_dict["data"]["num_concepts"]
+        if config.model.model == "scbm_residual":
+            config.data.num_residuals = info_line_dict["data"]["num_residuals"]
     
     full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
     if not os.path.exists(full_path_pkl_dir):

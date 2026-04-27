@@ -599,7 +599,6 @@ class SCBM_residual(nn.Module):
             return y_pred_log_probs
 
     def intervene(self, c_mcmc_probs, c_mcmc_logits):
-        raise NotImplementedError("Intervention not implemented for residual model yet.")
         y_pred_probs_i = 0
         c_hard = torch.bernoulli(c_mcmc_probs)
         for i in range(self.num_monte_carlo):
