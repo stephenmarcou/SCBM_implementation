@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import get_CUB_dataloaders
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
-from datasets.cifar100_dataset import get_CIFAR100_CBM_dataloader
+from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from utils.utils import numerical_stability_check
 
 
@@ -62,6 +62,9 @@ def get_data(config_base, config, gen):
         print("CIFAR-100 DATASET")
         trainset, validset, testset = get_CIFAR100_CBM_dataloader(
             config.data_path,
+            gen,
+            val_ratio=config.val_ratio,
+            use_full_train_after_tuning=config.use_full_train_after_tuning
         )
     else:
         NotImplementedError("ERROR: Dataset not supported!")

@@ -184,3 +184,4 @@ scbm_implementation/
 venv_cluster
 requirements_cluster.txt
 requirements_cluster_relaxed.txt
+datasets/cifar100/*

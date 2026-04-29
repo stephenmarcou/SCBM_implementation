@@ -60,6 +60,7 @@ class CUB_DatasetGenerator(Dataset):
         max_height = 500 
         max_width = 500 
         data_dims = (3, max_height, max_width) 
+        # Each image gets space for 750 000 unit8 values (3 channels * 500 height * 500 width)
         dimension = int(np.prod(data_dims)) 
         
         if self.cache:
@@ -67,19 +68,27 @@ class CUB_DatasetGenerator(Dataset):
             shared_array_base = mp.Array(
                 ctypes.c_uint8, num_samples * dimension 
             ) 
+            # Converts multiprocessing Array to a numpy array and reshape to (num_samples, 3, max_height, max_width)
             shared_array = np.ctypeslib.as_array(shared_array_base.get_obj()) 
             shared_array = shared_array.reshape(num_samples, *data_dims) 
+            # Convert to torch tensor 
             self.image_cache = torch.from_numpy(shared_array)
             
             # Create shared array for image dimensions and validity
             # Format: [height, width] per image, initialized to [-1, -1] (invalid)
+            # Each image gets space for 2 int values (height and width)
             dims_array_base = mp.Array(
                 ctypes.c_int, num_samples * 2  # 2 values per image: height, width
             )
             dims_array = np.ctypeslib.as_array(dims_array_base.get_obj())
             dims_array = dims_array.reshape(num_samples, 2)
             self.dims_cache = torch.from_numpy(dims_array)
+            # Shape (num_samples, 2), where each row is [height, width] of the cached image,
+            # initialized to [-1, -1] to indicate not cached
+            # When cached, the actual height and width of the image will be stored here 
+            # for correct retrieval without padding
             self.dims_cache.fill_(-1)  # Initialize to -1 to indicate not cached
+            
             
             # CUB has 112 binary attributes - we need 112 bits = 14 bytes per sample
             # We'll use 15 bytes (120 bits) for easier alignment and future expansion

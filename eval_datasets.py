@@ -9,6 +9,14 @@ import hydra
 from omegaconf import DictConfig
 from torch.utils.data import Dataset, DataLoader
 import pickle
+from torchvision import datasets
+import torch.nn.functional as F
+from utils.utils import reset_random_seeds
+from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
+from datasets.CUB_dataset import get_CUB_dataloaders
+
+
+
 
 class CUBDataset(Dataset):
     def __init__(self, pkl_path):
@@ -27,6 +35,36 @@ class CUBDataset(Dataset):
         attribute_label = torch.tensor(sample["attribute_label"], dtype=torch.float)
 
         return attribute_label, class_label
+    
+    
+class CIFAR100_CBM_dataloader(datasets.CIFAR100):
+    def __init__(self, *args, **kwargs):
+        super(CIFAR100_CBM_dataloader, self).__init__(*args, **kwargs)
+        
+        # Load concepts from CIFAR-100 dataset which correspond to 20 coarse labels
+        split_name = "train" if kwargs["train"] else "test"
+        with open(os.path.join(kwargs["root"], "cifar-100-python", split_name), "rb") as f:
+            entry = pickle.load(f, encoding="latin1")
+            coarse_labels = torch.as_tensor(
+                entry["coarse_labels"],
+                dtype=torch.long
+            )
+            
+            self.num_concepts = len(set(entry["coarse_labels"]))
+            # Concepts shape [num_samples, 20] with one-hot encoding
+            self.concepts = F.one_hot(
+                coarse_labels,
+                num_classes=self.num_concepts
+            ).float()
+    
+    def __getitem__(self, idx):
+        X, target = super().__getitem__(idx)
+        
+        return self.concepts[idx], target
+        
+        
+        
+        
 
 def choose_predictor(model_type, num_concepts, num_classes):
     # Final target predictor head 
@@ -46,7 +84,9 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device):
     total_loss = 0
     total_correct = 0
     for batch in train_loader:
-        attribute_label, class_label = batch
+        #attribute_label, class_label = batch
+        class_label = batch["labels"]
+        attribute_label = batch["concepts"]
         attribute_label, class_label = attribute_label.to(device), class_label.to(device)
 
         optimizer.zero_grad()
@@ -69,7 +109,9 @@ def validate_one_epoch(model, val_loader, criterion, device):
     total_correct = 0
     with torch.no_grad():
         for batch in val_loader:
-            attribute_label, class_label = batch
+            #attribute_label, class_label = batch
+            attribute_label = batch["concepts"]
+            class_label = batch["labels"]
             attribute_label, class_label = attribute_label.to(device), class_label.to(device)
 
             outputs = model(attribute_label)
@@ -86,7 +128,56 @@ def validate_one_epoch(model, val_loader, criterion, device):
 
 
 
+def get_dataset_num_concepts(dataset, config):
+    """Safely extract num_concepts from dataset or config.
+    
+    Works with both native datasets (CUB) and Subset-wrapped datasets (CIFAR).
+    """
+    print(f"Number of concepts: {len(dataset[0]['concepts'])}")
+    return len(dataset[0]["concepts"])
+
+
+def get_dataloaders(config, gen):
+    dataset = config.data.dataset
+    
+    if dataset == "cifar100":
+        print("CIFAR-100 DATASET")
+        train_data, val_data, test_data = get_CIFAR100_CBM_dataloader(
+            config.data.data_path,
+            gen,
+            val_ratio=config.data.val_ratio,
+            use_full_train_after_tuning=config.data.use_full_train_after_tuning,
+        )
+        
+        return train_data, val_data, test_data
+    
+    elif dataset == "CUB":
+        print("CUB DATASET")
+        
+        # pkl_file_dir = config.data.pkl_file_dir
+        # if config.incomplete:
+        #     full_data_path = os.path.join(config.data.data_path, dataset, "incomplete_data", pkl_file_dir)
+        # else:
+        #     full_data_path = os.path.join(config.data.data_path, dataset, pkl_file_dir)
+        
+        # train_data_path = os.path.join(full_data_path, "train.pkl")
+        # val_data_path = os.path.join(full_data_path, "val.pkl")
+        # test_data_path = os.path.join(full_data_path, "test.pkl")
+        # train_data = CUBDataset(train_data_path)
+        # val_data = CUBDataset(val_data_path)
+        # test_data = CUBDataset(test_data_path)
+        
+        train_data, val_data, test_data = get_CUB_dataloaders(
+            config.data, config.incomplete
+        )
+        return train_data, val_data, test_data
+
+
+
+
+
 def train(config):
+    # ---- Set random seeds and device ----
     if torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
@@ -95,12 +186,13 @@ def train(config):
         device = torch.device("cpu")
     print(f"Using device: {device}")
     
+    gen = reset_random_seeds(config.seed)
     
-    # Set paths
+    # Prepare logging and experiment directory
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
     pkl_file_dir = config.data.pkl_file_dir.strip("/")  
-    ex_name = pkl_file_dir + "_" + ex_name
+    ex_name = pkl_file_dir + "_" + ex_name + "_DELETE"
 
     
     experiment_path = (
@@ -119,25 +211,9 @@ def train(config):
         f.write(str(config) + "\n\n")  # Log the config at the beginning of the log file
 
     
-    
-    
-    
-    model_type = config.model.model
-    pkl_dir = config.data.pkl_file_dir
-    if "incomplete" in pkl_dir:
-        full_data_path = os.path.join(config.data.data_path, "CUB", "incomplete_data", pkl_dir)
-    else:
-        full_data_path = os.path.join(config.data.data_path, "CUB", pkl_dir)
-    
-    
-    
-    train_data_path = os.path.join(full_data_path, "train.pkl")
-    val_data_path = os.path.join(full_data_path, "val.pkl")
-    test_data_path = os.path.join(full_data_path, "test.pkl")
-    
-    train_data = CUBDataset(train_data_path)
-    val_data = CUBDataset(val_data_path)
-    test_data = CUBDataset(test_data_path)
+    # Load data
+    train_data, val_data, test_data = get_dataloaders(config, gen)
+        
     
     train_loader = DataLoader(
         train_data,
@@ -161,20 +237,24 @@ def train(config):
     )
 
     num_classes = config.data.num_classes
+    model_type = config.model.model
+    num_concepts = get_dataset_num_concepts(train_data, config)
     log_file = os.path.join(experiment_path, "log.txt")
     info_dict = {
         "model_type": model_type,
-        "num_concepts": train_data.num_concepts,
+        "num_concepts": num_concepts,
+        "num_residuals": config.data.num_residuals if model_type == "scbm_residual" else 0,
         "num_classes": num_classes,
-        "pkl_dir": pkl_dir}
+        "pkl_file_dir": pkl_file_dir
+        }
     
     with open(log_file, "w") as f:
         f.write(str(info_dict) + "\n\n")  # Log the config at the beginning of the log file
     
     
     
-    
-    pred_head = choose_predictor(model_type, train_data.num_concepts, num_classes)
+    # Prepare model
+    pred_head = choose_predictor(model_type, num_concepts, num_classes)
     model = pred_head
     model.to(device)
     
