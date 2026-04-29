@@ -7,6 +7,7 @@ dataset: 'cifar100' # Name of the dataset
 num_classes: 100 # Number of classes of the target variable
 #num_concepts: 892 # Number of concepts in dataset
 num_concepts: 20 # Number of concepts in dataset
+num_residuals: 5 # Number of residual features 
 pkl_file_dir: "cifar-100-python"
 val_ratio: 0.1 # Fraction of train split held out for validation during hyperparameter tuning
 use_full_train_after_tuning: False # If True, train/val both use full training set (for final retraining only)
