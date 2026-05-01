@@ -20,3 +20,4 @@ logging:
 
 inference:
   ex_name: null
+  save_concept_target_pred: False # Whether to save the predicted concepts and targets for each test set instance during inference [True, False]

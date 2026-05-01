@@ -289,7 +289,7 @@ def train(config):
         if epoch % config.model.validate_per_epoch == 0:
             print("\nEVALUATION ON THE VALIDATION SET:\n")
             validate_one_epoch(
-                val_loader, model, metrics, epoch, config, loss_fn, device
+                val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
             )
         train_one_epoch(
             train_loader,

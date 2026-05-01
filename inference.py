@@ -14,7 +14,7 @@ import wandb
 from models.losses import create_loss
 from utils.data import get_concept_groups, get_data
 from utils.intervention import intervene_cbm, intervene_scbm, intervene_scbm_residual
-from utils.training import Custom_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm
+from utils.training import Custom_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm, validate_one_epoch_scbm_residual
 from utils.utils import reset_random_seeds
 import torch
 from models.models import create_model
@@ -130,8 +130,12 @@ def run(config):
     if config.run_inference == True:
         if config.model.model == "cbm":
             validate_one_epoch = validate_one_epoch_cbm
-        else:
+        elif config.model.model == "scbm":
             validate_one_epoch = validate_one_epoch_scbm
+        elif config.model.model == "scbm_residual":
+            validate_one_epoch = validate_one_epoch_scbm_residual
+            
+        save_concept_target_pred = config.inference.save_concept_target_pred
 
         print("\nEVALUATION ON THE TEST SET:\n")
         validate_one_epoch(
@@ -144,7 +148,8 @@ def run(config):
             device,
             test=True,
             concept_names_graph=concept_names_graph,
-            log_file=log_file_inference
+            log_file=log_file_inference, 
+            save_concept_target_pred=save_concept_target_pred
         )
         
 
@@ -168,7 +173,7 @@ def run(config):
     wandb.finish(quiet=True)
     return None
 
-
+# Need to change this function
 def update_pkl_dir_and_num_concepts(config):
     experiment_path = (
         Path(config.experiment_dir) / config.model.model / config.data.dataset / config.inference.ex_name
@@ -184,9 +189,10 @@ def update_pkl_dir_and_num_concepts(config):
         if config.model.model == "scbm_residual":
             config.data.num_residuals = info_line_dict["data"]["num_residuals"]
     
-    full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
-    if not os.path.exists(full_path_pkl_dir):
-        raise ValueError(f"Pickle directory {full_path_pkl_dir} does not exist.")
+    if config.data.dataset == "CUB":
+        full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
+        if not os.path.exists(full_path_pkl_dir):
+            raise ValueError(f"Pickle directory {full_path_pkl_dir} does not exist.")
 
         
         
