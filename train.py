@@ -80,7 +80,7 @@ def train(config):
     if config.incomplete and config.remove_attribute_groups:
         ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
     elif config.incomplete and not config.remove_attribute_groups:
-        ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name + "_DELETE"
+        ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
     else:
         ex_name = "complete" + ex_name
     
