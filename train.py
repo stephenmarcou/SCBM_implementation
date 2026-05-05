@@ -76,6 +76,11 @@ def train(config):
     # Set paths
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
+    
+    if config.model.get("use_L_int_loss"):
+        ex_name = "L_int_loss_weight_" + str(config.model.L_int_loss_weight) + "_" + ex_name
+    
+    
     # I Changed
     if config.incomplete and config.remove_attribute_groups:
         ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
@@ -83,6 +88,11 @@ def train(config):
         ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
     else:
         ex_name = "complete" + ex_name
+    
+    
+        
+    if config.hyperparameter_search:
+        config.experiment_dir = join(config.experiment_dir, "hyperparameter_search")
     
     experiment_path = (
         Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
@@ -170,7 +180,7 @@ def train(config):
     patience = config.model.early_stopping_patience 
     epochs_without_improvement = 0
 
-    def maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement):
+    def maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file):
         """
         Check if validation accuracy improved. If so, save checkpoint and reset patience counter.
         Returns: (best_val_acc, epochs_without_improvement, should_stop_early)
@@ -194,6 +204,10 @@ def train(config):
                 f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}",
                 flush=True,
             )
+            with open(log_file, "a") as f:
+                f.write(
+                    f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}\n"
+                )
         
         return best_val_acc, epochs_without_improvement, should_stop
 
@@ -246,7 +260,7 @@ def train(config):
                 metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
-                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement)
+                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file)
                 if should_stop:
                     break
                 
@@ -287,7 +301,7 @@ def train(config):
                 metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
-                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement)
+                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file)
                 if should_stop:
                     break
             train_one_epoch(
@@ -331,7 +345,7 @@ def train(config):
         metrics_dict = validate_one_epoch(
             val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
         )
-        best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement)
+        best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file)
         if should_stop:
             break
         
@@ -353,9 +367,9 @@ def train(config):
     if config.save_model:
         if best_val_acc > float("-inf") and Path(best_model_path).exists():
             model.load_state_dict(torch.load(best_model_path, map_location=device))
-            print(f"Loaded best validation checkpoint from {best_model_path}", flush=True)
+            print(f"Loaded best validation checkpoint from {best_model_path}\n", flush=True)
             with open(log_file, "a") as f:
-                f.write(f"Loaded best validation checkpoint from {best_model_path}")
+                f.write(f"Loaded best validation checkpoint from {best_model_path}\n")
         torch.save(model.state_dict(), join(experiment_path, "model.pth"))
         print("\nTRAINING FINISHED, MODEL SAVED!", flush=True)
     else:
