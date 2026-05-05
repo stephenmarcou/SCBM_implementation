@@ -577,6 +577,7 @@ class SCBM_residual(nn.Module):
 
     def compute_y_pred_logits(self, c_res_mcmc_probs, c_res_mcmc_logits):
         # Pick the concept tensor: [B, C, M]
+        # if Straight-Through Gumbel Softmax then c_res_mcmc_probs approximately binary
         x = c_res_mcmc_probs if self.concept_learning == "hard" else c_res_mcmc_logits
         B, C, M = x.shape
         

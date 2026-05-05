@@ -41,6 +41,7 @@ def create_loss(config):
             alpha=config.model.alpha,
             config=config.model,
             num_concepts=config.data.num_concepts,
+            num_residuals=config.data.num_residuals,
         )
     else:
         raise NotImplementedError
@@ -238,7 +239,7 @@ class SCBresLoss(nn.Module):
     """
 
     def __init__(
-        self, num_classes: Optional[int] = 2, alpha: float = 1, config: dict = {}, num_concepts: int = 0
+        self, num_classes: Optional[int] = 2, alpha: float = 1, config: dict = {}, num_concepts: int = 0, num_residuals: int = 0,
     ) -> None:
         """
         Initialize the SCBLoss.
@@ -253,6 +254,10 @@ class SCBresLoss(nn.Module):
         self.reg_precision = config.reg_precision
         self.reg_weight = config.reg_weight
         self.num_concepts = num_concepts
+        self.num_residuals = num_residuals
+        self.L_int_loss_weight = config.L_int_loss_weight
+        self.use_L_int_loss = config.use_L_int_loss
+        self.concept_learning = config.concept_learning
 
         self.log_num_mc = math.log(config.num_monte_carlo)
         self.alpha = alpha if config.training_mode == "joint" else 1.0
@@ -270,7 +275,7 @@ class SCBresLoss(nn.Module):
         Compute the loss.
 
         Args:
-            concepts_mcmc_probs (Tensor): MCMC matrix of predicted concept probabilities.
+            concepts_mcmc_probs (Tensor): MCMC matrix of predicted concept probabilities. Shape: [B, C, MCMC]
             concepts_true (Tensor): Ground-truth concept values.
             target_pred_logits (Tensor): Predicted target logits.
             target_true (Tensor): Ground-truth target values.
@@ -282,6 +287,8 @@ class SCBresLoss(nn.Module):
         """
         #concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :self.num_concepts, :]
         concepts_loss = self.compute_concept_loss(concepts_mcmc_probs, concepts_true)
+        
+
 
         if self.num_classes == 2:
             # Logits to probs
@@ -319,6 +326,97 @@ class SCBresLoss(nn.Module):
         total_loss = target_loss + concepts_loss + prec_loss
 
         return target_loss, concepts_loss, prec_loss, total_loss
+        
+
+    def compute_L_int_loss(
+        self,
+        model,
+        c_res_mcmc_probs,
+        c_res_mcmc_logits,
+        c_true,
+        y_true,
+    ):
+        """
+        Computes L_int: task loss under full concept intervention.
+
+        Full intervention:
+            [c_pred, z_pred] -> [c_true, z_pred]
+
+        Shapes:
+            c_res_mcmc_probs:  [B, C + R, M]
+            c_res_mcmc_logits: [B, C + R, M]
+            c_true:            [B, C]
+            y_true:            [B] for multiclass, [B] or [B, 1] for binary
+        """
+
+        B, CR, M = c_res_mcmc_probs.shape
+        C = self.num_concepts
+
+        assert CR == self.num_concepts + self.num_residuals
+        assert c_true.shape[1] == C
+
+        # [B, C, M]
+        c_true_mcmc = c_true.float().unsqueeze(-1).expand(-1, -1, M)
+
+        if self.concept_learning == "hard":
+            # compute_y_pred_logits will use the first argument: c_res_mcmc_probs
+
+            # Keep residual samples/probs unchanged so gradients flow through residual path
+            z_probs = c_res_mcmc_probs[:, C:, :]
+
+            # Replace known concepts with ground truth
+            c_res_intervened_probs = torch.cat(
+                [c_true_mcmc, z_probs],
+                dim=1,
+            )
+
+            # Logits are ignored in hard mode, but pass original tensor for shape consistency
+            y_int_logits = model.compute_y_pred_logits(
+                c_res_intervened_probs,
+                c_res_mcmc_logits,
+            )
+
+        else:
+            # compute_y_pred_logits will use the second argument: c_res_mcmc_logits
+
+            # Convert binary c_true into finite logits
+            eps = 1e-4
+            c_true_logits = torch.logit(
+                c_true_mcmc.clamp(min=eps, max=1.0 - eps)
+            )
+
+            # Keep residual logits unchanged so gradients flow through residual path
+            z_logits = c_res_mcmc_logits[:, C:, :]
+
+            # Replace known concept logits with ground-truth concept logits
+            c_res_intervened_logits = torch.cat(
+                [c_true_logits, z_logits],
+                dim=1,
+            )
+
+            # Probs are ignored in soft/logit mode, but pass original tensor
+            y_int_logits = model.compute_y_pred_logits(
+                c_res_mcmc_probs,
+                c_res_intervened_logits,
+            )
+
+        if self.num_classes == 2:
+            y_true = y_true.float().view(-1, 1)
+            return F.binary_cross_entropy_with_logits(
+                y_int_logits,
+                y_true,
+            )
+
+        else:
+            # y_int_logits are the log probabilites
+            # view(-1) to ensure shape [B] for cross_entropy, works for both [B] and [B, 1]
+            y_true = y_true.long().view(-1)
+            return F.nll_loss(
+                y_int_logits,
+                y_true,
+            )
+            
+
 
 
 
@@ -327,6 +425,7 @@ class SCBresLoss(nn.Module):
 
     def compute_concept_loss(self, concepts_mcmc_probs, concepts_true):
         assert torch.all((concepts_true == 0) | (concepts_true == 1))
+        # Shape of concepts_true: [B, C], concepts_true_expanded: [B, C, MCMC], concepts_mcmc_probs: [B, C, MCMC]
         concepts_true_expanded = concepts_true.unsqueeze(-1).expand_as(
             concepts_mcmc_probs
         )

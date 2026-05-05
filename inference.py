@@ -135,7 +135,7 @@ def run(config):
         elif config.model.model == "scbm_residual":
             validate_one_epoch = validate_one_epoch_scbm_residual
             
-        save_concept_target_pred = config.inference.save_concept_target_pred
+        #save_concept_target_pred = config.inference.save_concept_target_pred
 
         print("\nEVALUATION ON THE TEST SET:\n")
         validate_one_epoch(
@@ -149,7 +149,7 @@ def run(config):
             test=True,
             concept_names_graph=concept_names_graph,
             log_file=log_file_inference, 
-            save_concept_target_pred=save_concept_target_pred
+            #save_concept_target_pred=save_concept_target_pred
         )
         
 

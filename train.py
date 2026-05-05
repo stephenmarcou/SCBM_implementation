@@ -66,7 +66,6 @@ def train(config):
         device = torch.device("cpu")
         
     
-    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Additional info when using cuda
     if device.type == "cuda":
@@ -81,7 +80,7 @@ def train(config):
     if config.incomplete and config.remove_attribute_groups:
         ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
     elif config.incomplete and not config.remove_attribute_groups:
-        ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
+        ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name + "_DELETE"
     else:
         ex_name = "complete" + ex_name
     
@@ -166,6 +165,37 @@ def train(config):
     loss_fn = create_loss(config)
 
     metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
+    best_val_acc = float("-inf")
+    best_model_path = join(experiment_path, "model_best.pth")
+    patience = config.model.early_stopping_patience 
+    epochs_without_improvement = 0
+
+    def maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement):
+        """
+        Check if validation accuracy improved. If so, save checkpoint and reset patience counter.
+        Returns: (best_val_acc, epochs_without_improvement, should_stop_early)
+        """
+        y_val_acc = float(metrics_dict["y_accuracy"])
+        if y_val_acc > best_val_acc:
+            best_val_acc = y_val_acc
+            epochs_without_improvement = 0
+            if config.save_model:
+                torch.save(model.state_dict(), best_model_path)
+                print(
+                    f"New best validation y_accuracy: {best_val_acc:.4f}. Saved checkpoint to {best_model_path}",
+                    flush=True,
+                )
+        else:
+            epochs_without_improvement += 1
+        
+        should_stop = epochs_without_improvement >= patience
+        if should_stop:
+            print(
+                f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}",
+                flush=True,
+            )
+        
+        return best_val_acc, epochs_without_improvement, should_stop
 
     # ---------------------------------
     #            Training
@@ -208,13 +238,18 @@ def train(config):
             step_size=config.model.decrease_every,
             gamma=1 / config.model.lr_divisor,
         )
+        epochs_without_improvement = 0
         for epoch in range(p_epochs):
             # Validate the model periodically
             if epoch % config.model.validate_per_epoch == 0:
-                print("\nEVALUATION ON THE VALIDATION SET:\n")
-                validate_one_epoch(
+                #print("\nEVALUATION ON THE VALIDATION SET:\n")
+                metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
+                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement)
+                if should_stop:
+                    break
+                
             train_one_epoch(
                 train_loader,
                 model,
@@ -244,13 +279,17 @@ def train(config):
             step_size=config.model.decrease_every,
             gamma=1 / config.model.lr_divisor,
         )
+        epochs_without_improvement = 0
         for epoch in range(c_epochs):
             # Validate the model periodically
             if epoch % config.model.validate_per_epoch == 0:
-                print("\nEVALUATION ON THE VALIDATION SET:\n")
-                validate_one_epoch(
+                #print("\nEVALUATION ON THE VALIDATION SET:\n")
+                metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
+                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement)
+                if should_stop:
+                    break
             train_one_epoch(
                 train_loader,
                 model,
@@ -285,12 +324,17 @@ def train(config):
 
     # If sequential & independent training: second stage is training of target predictor
     # If joint training: training of both concept encoder and target predictor
+    epochs_without_improvement = 0
     for epoch in range(0, t_epochs):
-        if epoch % config.model.validate_per_epoch == 0:
-            print("\nEVALUATION ON THE VALIDATION SET:\n")
-            validate_one_epoch(
-                val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
-            )
+        #if epoch % config.model.validate_per_epoch == 0:
+            #print("\nEVALUATION ON THE VALIDATION SET:\n")
+        metrics_dict = validate_one_epoch(
+            val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
+        )
+        best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement)
+        if should_stop:
+            break
+        
         train_one_epoch(
             train_loader,
             model,
@@ -307,12 +351,27 @@ def train(config):
 
     model.apply(freeze_module)
     if config.save_model:
+        if best_val_acc > float("-inf") and Path(best_model_path).exists():
+            model.load_state_dict(torch.load(best_model_path, map_location=device))
+            print(f"Loaded best validation checkpoint from {best_model_path}", flush=True)
+            with open(log_file, "a") as f:
+                f.write(f"Loaded best validation checkpoint from {best_model_path}")
         torch.save(model.state_dict(), join(experiment_path, "model.pth"))
         print("\nTRAINING FINISHED, MODEL SAVED!", flush=True)
     else:
         print("\nTRAINING FINISHED", flush=True)
-
-    print("\nEVALUATION ON THE TEST SET:\n")
+        
+        
+    if config.hyperparameter_search:
+        print("\nEVALUATION ON THE VALIDATION SET:\n")
+        with open(log_file, "a") as f:
+            f.write("\nEVALUATION ON THE VALIDATION SET:\n")
+        metrics_dict = validate_one_epoch(
+            val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
+        )
+        return None
+    
+    print("\nFINAL EVALUATION ON THE TEST SET:\n")
     validate_one_epoch(
         test_loader,
         model,

@@ -78,7 +78,8 @@ def train_one_epoch_scbm_residual(
         # Backward pass depends on the training mode of the model
         optimizer.zero_grad()
 
-
+    
+                
 
         # Compute the loss
         target_loss, concepts_loss, prec_loss, total_loss = loss_fn(
@@ -88,6 +89,22 @@ def train_one_epoch_scbm_residual(
             target_true,
             triang_cov,
         )
+        
+        # Intervene on concepts to get L_int loss
+        if config.model.use_L_int_loss == True:
+            if k == 0:
+                print("Using L_int_loss with weight: ", config.model.L_int_loss_weight)
+            L_int_loss = loss_fn.compute_L_int_loss(
+                model,
+                concepts_residuals_mcmc_probs,
+                None,
+                concepts_true,
+                target_true,
+            )
+            total_loss = total_loss + config.model.L_int_loss_weight * L_int_loss
+
+
+
 
         if mode == "j":
             total_loss.backward()
@@ -354,7 +371,7 @@ def validate_one_epoch_scbm_residual(
     test=False,
     concept_names_graph=None,
     log_file=None,
-    save_concept_target_pred=False
+    #save_concept_target_pred=False
 ):
     """
     Validate the Stochastic Concept Bottleneck Model (SCBM) for one epoch.
@@ -384,18 +401,18 @@ def validate_one_epoch_scbm_residual(
         - Metrics are computed and logged at the end of the validation epoch.
         - During testing, the function generates and plots a heatmap of the concept correlation matrix.
     """
-    if save_concept_target_pred:
-        save_path = log_file.with_name("concept_target_predictions.pt")
-        with open(save_path, "wb") as f:
-            torch.save(
-                {
-                    "concepts_true": [],
-                    "concepts_pred": [],
-                    "targets_true": [],
-                    "targets_pred": [],
-                },
-                f,
-            )
+    # if save_concept_target_pred:
+    #     save_path = log_file.with_name("concept_target_predictions.pt")
+    #     with open(save_path, "wb") as f:
+    #         torch.save(
+    #             {
+    #                 "concepts_true": [],
+    #                 "concepts_pred": [],
+    #                 "targets_true": [],
+    #                 "targets_pred": [],
+    #             },
+    #             f,
+    #         )
     
     
     model.eval()
@@ -415,27 +432,27 @@ def validate_one_epoch_scbm_residual(
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
             
             # Just to check if concept and target accuracies are correct
-            if save_concept_target_pred:
-                # Load existing predictions
-                with open(save_path, "rb") as f:
-                    data = torch.load(f)
+            # if save_concept_target_pred:
+            #     # Load existing predictions
+            #     with open(save_path, "rb") as f:
+            #         data = torch.load(f)
 
                 
-                concepts_probs = concepts_mcmc_probs.mean(-1).cpu()
-                concepts_preds_binary = (concepts_probs > 0.5).int()
-                if target_pred_logits.size(1) == 1:
-                    target_pred = (torch.sigmoid(target_pred_logits.squeeze(1)) > 0.5).int().cpu()
-                else:
-                    target_pred = target_pred_logits.argmax(dim=-1).cpu()
-                # Append new predictions
-                data["concepts_true"].append(concepts_true.cpu())
-                data["concepts_pred"].append(concepts_preds_binary)
-                data["targets_true"].append(target_true.cpu())
-                data["targets_pred"].append(target_pred)
+            #     concepts_probs = concepts_mcmc_probs.mean(-1).cpu()
+            #     concepts_preds_binary = (concepts_probs > 0.5).int()
+            #     if target_pred_logits.size(1) == 1:
+            #         target_pred = (torch.sigmoid(target_pred_logits.squeeze(1)) > 0.5).int().cpu()
+            #     else:
+            #         target_pred = target_pred_logits.argmax(dim=-1).cpu()
+            #     # Append new predictions
+            #     data["concepts_true"].append(concepts_true.cpu())
+            #     data["concepts_pred"].append(concepts_preds_binary)
+            #     data["targets_true"].append(target_true.cpu())
+            #     data["targets_pred"].append(target_pred)
 
-                # Save updated predictions
-                with open(save_path, "wb") as f:
-                    torch.save(data, f)
+            #     # Save updated predictions
+            #     with open(save_path, "wb") as f:
+            #         torch.save(data, f)
        
             
             
@@ -498,7 +515,7 @@ def validate_one_epoch_scbm_residual(
     print(prints)
     print()
     metrics.reset()
-    return
+    return metrics_dict
 
 
 
@@ -621,7 +638,7 @@ def validate_one_epoch_scbm(
     print(prints)
     print()
     metrics.reset()
-    return
+    return metrics_dict
 
 
 def validate_one_epoch_cbm(
@@ -718,7 +735,7 @@ def validate_one_epoch_cbm(
     print(prints)
     print()
     metrics.reset()
-    return
+    return metrics_dict
 
 
 def create_optimizer(config, model):
