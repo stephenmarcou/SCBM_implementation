@@ -9,11 +9,12 @@ def main(config: DictConfig):
     check_cluster()
     update_config_paths(config)
     if config.remove_attribute_groups:
-        print("Creating new incomplete dataset by removing attribute groups...")
+        print("Creating new incomplete dataset by removing random attribute groups...")
         new_pkl_dir, num_attributes_remaining = create_random_incomplete_dataset_attr_groups(config.data, config.num_attribute_groups_remove)
     else:
-        print("Creating new incomplete dataset by removing individual attributes...")
+        print("Creating new incomplete dataset by removing random individual attributes...")
         new_pkl_dir, num_attributes_remaining = create_random_incomplete_dataset_indiv_attr(config.data, config.ratio_attributes_remove)
+        
 
 
 

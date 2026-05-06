@@ -192,7 +192,7 @@ def train(config):
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
     pkl_file_dir = config.data.pkl_file_dir.strip("/")  
-    ex_name = pkl_file_dir + "_" + ex_name + "_DELETE"
+    ex_name = pkl_file_dir + "_" + ex_name
 
     
     experiment_path = (
