@@ -361,12 +361,12 @@ class SCBresLoss(nn.Module):
         if self.concept_learning == "hard":
             # compute_y_pred_logits will use the first argument: c_res_mcmc
 
-            # Keep residual samples unchanged so this matches the task head's training distribution.
-            z_samples = c_res_mcmc[:, C:, :]
+            # Keep residual samples/probs unchanged so gradients flow through residual path
+            z = c_res_mcmc[:, C:, :]
 
             # Replace known concepts with ground truth
             c_res_intervened = torch.cat(
-                [c_true_mcmc, z_samples],
+                [c_true_mcmc, z],
                 dim=1,
             )
 
@@ -376,6 +376,7 @@ class SCBresLoss(nn.Module):
                 c_res_mcmc_logits,
             )
 
+        # Have to check this when concept learning is not hard!
         else:
             # compute_y_pred_logits will use the second argument: c_res_mcmc_logits
 
