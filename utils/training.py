@@ -68,9 +68,13 @@ def train_one_epoch_scbm_residual(
         concepts_true = batch["concepts"].to(device)
 
         # Forward pass
-        concepts_residuals_mcmc_probs, triang_cov, target_pred_logits = model(
-            batch_features, epoch, c_true=concepts_true
-        )
+        (
+            concepts_residuals_mcmc_probs,
+            concepts_residuals_mcmc,
+            concepts_residuals_mcmc_logits,
+            triang_cov,
+            target_pred_logits,
+        ) = model(batch_features, epoch, c_true=concepts_true, return_samples=True)
         
         
         concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
@@ -96,8 +100,8 @@ def train_one_epoch_scbm_residual(
                 print("Using L_int_loss with weight: ", config.model.L_int_loss_weight)
             L_int_loss = loss_fn.compute_L_int_loss(
                 model,
-                concepts_residuals_mcmc_probs,
-                None,
+                concepts_residuals_mcmc,
+                concepts_residuals_mcmc_logits,
                 concepts_true,
                 target_true,
             )

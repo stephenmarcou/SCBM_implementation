@@ -331,7 +331,7 @@ class SCBresLoss(nn.Module):
     def compute_L_int_loss(
         self,
         model,
-        c_res_mcmc_probs,
+        c_res_mcmc,
         c_res_mcmc_logits,
         c_true,
         y_true,
@@ -343,13 +343,13 @@ class SCBresLoss(nn.Module):
             [c_pred, z_pred] -> [c_true, z_pred]
 
         Shapes:
-            c_res_mcmc_probs:  [B, C + R, M]
+            c_res_mcmc:        [B, C + R, M]
             c_res_mcmc_logits: [B, C + R, M]
             c_true:            [B, C]
             y_true:            [B] for multiclass, [B] or [B, 1] for binary
         """
 
-        B, CR, M = c_res_mcmc_probs.shape
+        B, CR, M = c_res_mcmc.shape
         C = self.num_concepts
 
         assert CR == self.num_concepts + self.num_residuals
@@ -359,20 +359,20 @@ class SCBresLoss(nn.Module):
         c_true_mcmc = c_true.float().unsqueeze(-1).expand(-1, -1, M)
 
         if self.concept_learning == "hard":
-            # compute_y_pred_logits will use the first argument: c_res_mcmc_probs
+            # compute_y_pred_logits will use the first argument: c_res_mcmc
 
-            # Keep residual samples/probs unchanged so gradients flow through residual path
-            z_probs = c_res_mcmc_probs[:, C:, :]
+            # Keep residual samples unchanged so this matches the task head's training distribution.
+            z_samples = c_res_mcmc[:, C:, :]
 
             # Replace known concepts with ground truth
-            c_res_intervened_probs = torch.cat(
-                [c_true_mcmc, z_probs],
+            c_res_intervened = torch.cat(
+                [c_true_mcmc, z_samples],
                 dim=1,
             )
 
             # Logits are ignored in hard mode, but pass original tensor for shape consistency
             y_int_logits = model.compute_y_pred_logits(
-                c_res_intervened_probs,
+                c_res_intervened,
                 c_res_mcmc_logits,
             )
 
@@ -396,7 +396,7 @@ class SCBresLoss(nn.Module):
 
             # Probs are ignored in soft/logit mode, but pass original tensor
             y_int_logits = model.compute_y_pred_logits(
-                c_res_mcmc_probs,
+                c_res_mcmc,
                 c_res_intervened_logits,
             )
 

@@ -471,7 +471,15 @@ class SCBM_residual(nn.Module):
             self.head = nn.Sequential(fc1_y, nn.ReLU(), fc2_y)
 
 
-    def forward(self, x, epoch, validation=False, return_full=False, c_true=None):
+    def forward(
+        self,
+        x,
+        epoch,
+        validation=False,
+        return_full=False,
+        c_true=None,
+        return_samples=False,
+    ):
         """
         Perform a forward pass through the Stochastic Concept Bottleneck Model (SCBM).
 
@@ -559,6 +567,15 @@ class SCBM_residual(nn.Module):
                 c_res_mcmc = mcmc_relaxed
                 
         y_pred_logits = self.compute_y_pred_logits(c_res_mcmc, c_res_mcmc_logit)
+
+        if return_samples:
+            return (
+                c_res_mcmc_prob,
+                c_res_mcmc,
+                c_res_mcmc_logit,
+                c_res_triang_cov,
+                y_pred_logits,
+            )
 
         # Return concept mu for interventions
         if return_full:
