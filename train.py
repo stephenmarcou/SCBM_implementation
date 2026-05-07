@@ -380,12 +380,18 @@ def train(config):
         
         
     if config.hyperparameter_search:
+        print("\nHYPERPARAMETER SEARCH - SKIPPING TEST EVALUATION\n")
+        with open(log_file, "a") as f:
+            f.write("\nHYPERPARAMETER SEARCH - SKIPPING TEST EVALUATION\n")
+            
         print("\nEVALUATION ON THE VALIDATION SET:\n")
         with open(log_file, "a") as f:
             f.write("\nEVALUATION ON THE VALIDATION SET:\n")
         metrics_dict = validate_one_epoch(
             val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
         )
+        
+        print("Done with this hyperparameter setting. Moving to the next one...\n\n")
         return None
     
     print("\nFINAL EVALUATION ON THE TEST SET:\n")
