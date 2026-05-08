@@ -457,6 +457,7 @@ def intervene_scbm_residual(
                         cov_norm=c_res_cov_norm,
                         prec_loss=prec_loss,
                     )
+                    
 
                     (
                         _,
@@ -567,12 +568,14 @@ def intervene_scbm_residual(
                             c_res_cov,
                             concepts_residuals_pred_probs,
                             concepts_mask,
-                            c_mu_original,
-                            c_cov_original,
+                            c_res_mu_original,
+                            c_res_cov_original,
                             concepts_true,
                             target_true,
                         ) = [item.to(device) for item in batch]
-
+                        # if k==0:
+                        #     print(f"num_intervened: {num_intervened}, concepts_mask.shape: {concepts_mask.shape}")
+                        
                         # Determining new concept to intervene on
                         concepts_mask_new = (
                             intervention_policy.compute_intervention_mask(
@@ -584,6 +587,9 @@ def intervene_scbm_residual(
                                 cov=c_res_cov, #not used
                             )
                         )
+                        
+                        # if k==0:
+                        #     print(f"concepts_mask_new.shape: {concepts_mask_new.shape}")
 
                         # Intervening including new concept
                         (
@@ -592,8 +598,8 @@ def intervene_scbm_residual(
                             c_res_mcmc_probs,
                             c_res_mcmc_logits,
                         ) = intervention_strategy.compute_intervention(
-                            c_mu_original,
-                            c_cov_original,
+                            c_res_mu_original,
+                            c_res_cov_original,
                             concepts_true,
                             concepts_mask_new,
                         )
@@ -1400,16 +1406,16 @@ class RandomSubsetInterventionPolicy:
             torch.Tensor: An updated tensor with one additional masked concept.
                           Shape: (batch_size, num_concepts)
         """
-        if residual_model:
-            if num_concepts is None:
-                raise ValueError("num_concepts must be provided for residual model.")
-            else:
-                num_noninterv_concepts = num_concepts - concepts_mask.sum(1)[0]
-                num_noninterv_concepts = int(num_noninterv_concepts.item()) 
-                active_mask = concepts_mask[:, :num_concepts]
-        else:
-            num_noninterv_concepts = concepts_mask.shape[1] - concepts_mask.sum(1)[0]
-            num_noninterv_concepts = int(num_noninterv_concepts.item()) # I changed
+        # if residual_model:
+        #     if num_concepts is None:
+        #         raise ValueError("num_concepts must be provided for residual model.")
+        #     else:
+        #         num_noninterv_concepts = num_concepts - concepts_mask.sum(1)[0]
+        #         num_noninterv_concepts = int(num_noninterv_concepts.item()) 
+        #         active_mask = concepts_mask[:, :num_concepts]
+        #else:
+        num_noninterv_concepts = concepts_mask.shape[1] - concepts_mask.sum(1)[0]
+        num_noninterv_concepts = int(num_noninterv_concepts.item()) # I changed
             
             
         interv_indices = torch.randint(
@@ -1419,36 +1425,36 @@ class RandomSubsetInterventionPolicy:
             device=concepts_mask.device,
         )
 
-        if residual_model:
-            # Get indices of non-masked concepts only among first `num_concepts`
-            non_masked_indices = torch.where(active_mask == 0)[1].reshape(
-                -1, num_noninterv_concepts
-            )
+        # if residual_model:
+        #     # Get indices of non-masked concepts only among first `num_concepts`
+        #     non_masked_indices = torch.where(active_mask == 0)[1].reshape(
+        #         -1, num_noninterv_concepts
+        #     )
 
-            interv_indices_adjusted = non_masked_indices[
-                torch.arange(concepts_mask.shape[0]), interv_indices
-            ]
+        #     interv_indices_adjusted = non_masked_indices[
+        #         torch.arange(concepts_mask.shape[0]), interv_indices
+        #     ]
 
-            # Update only those selected concept positions
-            concepts_mask[torch.arange(concepts_mask.shape[0]), interv_indices_adjusted] = 1
+        #     # Update only those selected concept positions
+        #     concepts_mask[torch.arange(concepts_mask.shape[0]), interv_indices_adjusted] = 1
 
-            assert torch.all(concepts_mask[:, :num_concepts].sum(1) == concepts_mask[:, :num_concepts].sum(1)[0])
-            return concepts_mask
+        #     assert torch.all(concepts_mask[:, :num_concepts].sum(1) == concepts_mask[:, :num_concepts].sum(1)[0])
+        #     return concepts_mask
 
-        else:
+        #else:
 
-            # Adjust for concepts that are already masked
-            non_masked_indices = torch.where(concepts_mask == 0)[1].reshape(
-                -1, num_noninterv_concepts
-            )
-            interv_indices_adjusted = non_masked_indices[
-                torch.arange(concepts_mask.shape[0]), interv_indices
-            ]
+        # Adjust for concepts that are already masked
+        non_masked_indices = torch.where(concepts_mask == 0)[1].reshape(
+            -1, num_noninterv_concepts
+        )
+        interv_indices_adjusted = non_masked_indices[
+            torch.arange(concepts_mask.shape[0]), interv_indices
+        ]
 
-            concepts_mask[torch.arange(concepts_mask.shape[0]), interv_indices_adjusted] = 1
+        concepts_mask[torch.arange(concepts_mask.shape[0]), interv_indices_adjusted] = 1
 
-            assert torch.all(concepts_mask.sum(1) == concepts_mask.sum(1)[0])
-            return concepts_mask
+        assert torch.all(concepts_mask.sum(1) == concepts_mask.sum(1)[0])
+        return concepts_mask
     
     
     def compute_intervention_mask_fixed(
@@ -2090,6 +2096,7 @@ class ConfIntervalOptimalStrategy:
         n_intervened = c_mask.sum(1)[0]
         n_intervened = int(n_intervened.item()) # I changed
         
+        # print(f"c_mask.shape: {c_mask.shape}, n_intervened: {n_intervened}")
         
         # Separate intervened-on concepts from others
         indices = torch.argsort(c_mask, dim=1, descending=True, stable=True)
