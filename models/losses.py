@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from typing import Optional
+from utils.utils import numerical_stability_check
 
 
 def create_loss(config):
@@ -418,7 +419,52 @@ class SCBresLoss(nn.Module):
             )
             
 
-
+    def compute_L_int_extension_loss(
+        self,
+        model, 
+        triang_cov,
+        c_res_mu,
+        target_true,
+        concepts_true,
+        device,
+        intervention_strategy,
+    ):
+        
+        if device.type == "mps":  # MPS backend has issues with double precision
+                triang_cov = triang_cov.to(torch.float32)
+                c_res_mu = c_res_mu.to(torch.float32)
+        else:
+            triang_cov = triang_cov.to(torch.float64)
+            c_res_mu = c_res_mu.to(torch.float64)
+        
+        # Retrieve original (pre-intervention) covariance matrix through Cholesky decomposition
+        c_res_cov = torch.matmul(
+            triang_cov,
+            torch.transpose(triang_cov, dim0=1, dim1=2),
+        )
+        c_res_cov = numerical_stability_check(c_res_cov, device=device)
+        
+        # Intervene on all concepts
+        concepts_mask = torch.ones_like(concepts_true) # [B, num_concepts]
+        
+        
+        (
+            c_res_interv_mu,
+            c_res_interv_cov,
+            c_res_mcmc_probs,
+            c_res_mcmc_logits,
+        ) = intervention_strategy.compute_intervention(
+            c_res_mu,
+            c_res_cov,
+            concepts_true,
+            concepts_mask,
+        )
+        
+        target_pred_logits = model.intervene(c_res_mcmc_probs, c_res_mcmc_logits)
+        
+        L_int_extension_loss = F.nll_loss(target_pred_logits, target_true)
+    
+        return L_int_extension_loss
 
 
 

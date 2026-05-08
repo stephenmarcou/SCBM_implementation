@@ -479,6 +479,7 @@ class SCBM_residual(nn.Module):
         return_full=False,
         c_true=None,
         return_samples=False,
+        return_L_int_extension=False,
     ):
         """
         Perform a forward pass through the Stochastic Concept Bottleneck Model (SCBM).
@@ -575,6 +576,16 @@ class SCBM_residual(nn.Module):
                 c_res_mcmc_logit,
                 c_res_triang_cov,
                 y_pred_logits,
+            )
+            
+        if return_L_int_extension:
+            return (
+                c_res_mcmc_prob,
+                c_res_mcmc,
+                c_res_mcmc_logit,
+                c_res_triang_cov,
+                y_pred_logits,
+                c_res_mu,
             )
 
         # Return concept mu for interventions

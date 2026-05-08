@@ -27,3 +27,5 @@ level: 0.99 # Confidence level for confidence interval based intervention strate
 # --------------------------
 use_L_int_loss: False # Whether to use the L_int loss as defined in the paper [True, False]
 L_int_loss_weight: 1 # Weight of the L_int loss if use_L_int_loss is True
+use_L_int_extension_loss: False # Whether to use the L_int extension loss as defined in the paper [True, False] 
+L_int_extension_loss_weight: 1 # Weight of the L_int extension loss if use_L_int_extension_loss is True

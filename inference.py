@@ -13,7 +13,7 @@ import wandb
 
 from models.losses import create_loss
 from utils.data import get_concept_groups, get_data
-from utils.intervention import intervene_cbm, intervene_scbm, intervene_scbm_residual
+from utils.intervention import intervene_cbm, intervene_scbm, intervene_scbm_residual, intervene_scbm_residual_optimized
 from utils.training import Custom_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm, validate_one_epoch_scbm_residual
 from utils.utils import reset_random_seeds
 import torch
@@ -163,7 +163,9 @@ def run(config):
         elif config.model.model == "scbm":
             intervene = intervene_scbm
         else:
-            intervene = intervene_scbm_residual
+            #intervene = intervene_scbm_residual
+            # CHANGE AFTERWARDS
+            intervene = intervene_scbm_residual_optimized
         # Intervention curves
         print("\nPERFORMING INTERVENTIONS:\n")
         intervene(

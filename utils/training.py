@@ -12,7 +12,9 @@ import wandb
 
 from utils.metrics import calc_target_metrics, calc_concept_metrics
 from utils.plotting import compute_and_plot_heatmap
+from utils.utils import numerical_stability_check
 
+from utils.intervention import define_strategy
 
 def train_one_epoch_scbm_residual(
     train_loader, model, optimizer, mode, metrics, epoch, config, loss_fn, device, log_file = None
@@ -74,8 +76,8 @@ def train_one_epoch_scbm_residual(
             concepts_residuals_mcmc_logits,
             triang_cov,
             target_pred_logits,
-        ) = model(batch_features, epoch, c_true=concepts_true, return_samples=True)
-        
+            c_res_mu,
+        ) = model(batch_features, epoch, c_true=concepts_true, return_L_int_extension=True)
         
         concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
 
@@ -106,6 +108,22 @@ def train_one_epoch_scbm_residual(
                 target_true,
             )
             total_loss = total_loss + config.model.L_int_loss_weight * L_int_loss
+            
+        # Intervene on concepts and propagate effect to residuals to get L_int_extension loss
+        elif config.model.use_L_int_extension_loss == True:
+            # Define intervention strategy and compute intervention
+            strategy = "conf_interval_optimal"
+            intervention_strategy = define_strategy(
+                    strategy, train_loader, model, device, config
+                )
+            
+            
+            L_int_extension_loss = loss_fn.compute_L_int_extension_loss(
+                 model, triang_cov, c_res_mu, target_true, concepts_true, device, intervention_strategy
+            )
+    
+            total_loss = total_loss + config.model.L_int_extension_loss_weight * L_int_extension_loss
+            
 
 
 
