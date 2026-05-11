@@ -61,6 +61,14 @@ def train_one_epoch_scbm_residual(
         elif mode == "t":
             model.encoder.eval()
 
+    # Define intervention strategy for L_int_extension_loss if needed
+    if config.model.use_L_int_extension_loss == True:
+        strategy = "conf_interval_optimal"
+        intervention_strategy = define_strategy(
+                strategy, train_loader, model, device, config
+            )
+
+
     for k, batch in enumerate(
         tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)
     ):
@@ -111,13 +119,9 @@ def train_one_epoch_scbm_residual(
             
         # Intervene on concepts and propagate effect to residuals to get L_int_extension loss
         elif config.model.use_L_int_extension_loss == True:
-            # Define intervention strategy and compute intervention
-            strategy = "conf_interval_optimal"
-            intervention_strategy = define_strategy(
-                    strategy, train_loader, model, device, config
-                )
-            
-            
+            if k == 0:
+                print("Using L_int_extension_loss with weight: ", config.model.L_int_extension_loss_weight)
+
             L_int_extension_loss = loss_fn.compute_L_int_extension_loss(
                  model, triang_cov, c_res_mu, target_true, concepts_true, device, intervention_strategy
             )

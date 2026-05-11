@@ -79,8 +79,9 @@ def train(config):
     
     if config.model.get("use_L_int_loss"):
         ex_name = "L_int_loss_weight_" + str(config.model.L_int_loss_weight) + "_" + ex_name
-    
-    
+    if config.model.get("use_L_int_extension_loss"):
+        ex_name = "L_int_extension_loss_weight_" + str(config.model.L_int_extension_loss_weight) + "_" + ex_name
+
     # I Changed
     if config.save_name is not None:
         ex_name = config.save_name + "_" + ex_name

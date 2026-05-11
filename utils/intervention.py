@@ -2304,16 +2304,6 @@ class SCBM_Strategy:
         mcmc_probs = self.act_c(mcmc_logits)
 
         # Set intervened-on hard concepts to 0/1
-        
-        # if self.residual:
-        #     # expand c_true and c_mask to include residuals (which are not intervened on, so mask is 0 and true is 0)
-        #     batch_size = c_true.shape[0]
-        #     zeros_residual = torch.zeros(batch_size, self.num_residuals, device=c_true.device, dtype=c_true.dtype)
-        #     c_true = torch.cat([c_true, zeros_residual], dim=1)
-        #     c_mask = torch.cat([c_mask, torch.zeros_like(zeros_residual)], dim=1)
-
-        
-        
         mcmc_probs = (c_true * c_mask).unsqueeze(2).repeat(
             1, 1, self.num_monte_carlo
         ) + mcmc_probs * (1 - c_mask).unsqueeze(2).repeat(1, 1, self.num_monte_carlo)

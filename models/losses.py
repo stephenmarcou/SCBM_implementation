@@ -460,7 +460,7 @@ class SCBresLoss(nn.Module):
             concepts_mask,
         )
         
-        target_pred_logits = model.intervene(c_res_mcmc_probs, c_res_mcmc_logits)
+        target_pred_logits = model.intervene_straight_through(c_res_mcmc_probs, c_res_mcmc_logits)
         
         L_int_extension_loss = F.nll_loss(target_pred_logits, target_true)
     

@@ -313,6 +313,8 @@ class SCBM(nn.Module):
             y_pred_logits = torch.log(y_pred_probs + 1e-6)
 
         return y_pred_logits
+    
+
 
     def compute_temperature(self, epoch):
         curr_temp = max(self.init_temp * math.exp(self.temp_decay_rate * epoch), self.final_temp)
@@ -649,6 +651,37 @@ class SCBM_residual(nn.Module):
             y_pred_logits = torch.log(y_pred_probs + 1e-6)
 
         return y_pred_logits
+    
+    def intervene_straight_through(self, c_mcmc_probs, c_mcmc_logits):
+        y_pred_probs_i = 0
+        c_hard = torch.bernoulli(c_mcmc_probs)
+
+        c_input = c_hard.detach() - c_mcmc_probs.detach() + c_mcmc_probs
+        # Equivalent idea:
+        # forward:  c_input == c_hard
+        # backward: d c_input / d c_mcmc_probs == 1
+        for i in range(self.num_monte_carlo):
+            c_i = c_input[:, :, i]
+
+            y_pred_logits_i = self.head(c_i)
+            if self.pred_dim == 1:
+                y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
+            else:
+                y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
+
+        y_pred_probs = y_pred_probs_i / self.num_monte_carlo
+        if self.pred_dim == 1:
+            y_pred_logits = torch.logit(y_pred_probs, eps=1e-6)
+        else:
+            y_pred_logits = torch.log(y_pred_probs + 1e-6)
+
+        return y_pred_logits
+        
+
+
+
+
+
 
     def compute_temperature(self, epoch):
         curr_temp = max(self.init_temp * math.exp(self.temp_decay_rate * epoch), self.final_temp)
