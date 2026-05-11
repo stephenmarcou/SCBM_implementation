@@ -128,7 +128,10 @@ def train_one_epoch_scbm_residual(
     
             total_loss = total_loss + config.model.L_int_extension_loss_weight * L_int_extension_loss
             
-
+        if config.model.use_L_int_loss == False:
+            L_int_loss = None
+        elif config.model.use_L_int_extension_loss == False:
+            L_int_extension_loss = None
 
 
 
@@ -151,6 +154,9 @@ def train_one_epoch_scbm_residual(
             concepts_true,
             concepts_pred_probs,
             prec_loss=prec_loss,
+            L_int_loss = L_int_loss,
+            L_int_extension_loss = L_int_extension_loss,
+            
         )
 
     # Calculate and log metrics
@@ -442,6 +448,15 @@ def validate_one_epoch_scbm_residual(
     
     
     model.eval()
+    
+        # Define intervention strategy for L_int_extension_loss if needed
+    if config.model.use_L_int_extension_loss == True:
+        strategy = "conf_interval_optimal"
+        intervention_strategy = define_strategy(
+                strategy, loader, model, device, config
+            )
+    
+    
     with torch.no_grad():
 
         for k, batch in enumerate(
@@ -451,10 +466,20 @@ def validate_one_epoch_scbm_residual(
                 "labels"
             ].to(device)
             concepts_true = batch["concepts"].to(device)
-            concepts_residuals_mcmc_probs, triang_cov, target_pred_logits = model(
-                batch_features, epoch, validation=True, c_true=concepts_true
-            )
+            # concepts_residuals_mcmc_probs, triang_cov, target_pred_logits = model(
+            #     batch_features, epoch, validation=True, c_true=concepts_true
+            # )
             
+            # Forward pass
+            (
+                concepts_residuals_mcmc_probs,
+                concepts_residuals_mcmc,
+                concepts_residuals_mcmc_logits,
+                triang_cov,
+                target_pred_logits,
+                c_res_mu,
+            ) = model(batch_features, epoch, c_true=concepts_true, return_L_int_extension=True)
+                
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
             
             # Just to check if concept and target accuracies are correct
@@ -508,6 +533,39 @@ def validate_one_epoch_scbm_residual(
                 target_true,
                 triang_cov,
             )
+            
+            # Intervene on concepts to get L_int loss
+            if config.model.use_L_int_loss == True:
+                if k == 0:
+                    print("Using L_int_loss with weight: ", config.model.L_int_loss_weight)
+                L_int_loss = loss_fn.compute_L_int_loss(
+                    model,
+                    concepts_residuals_mcmc,
+                    concepts_residuals_mcmc_logits,
+                    concepts_true,
+                    target_true,
+                )
+                total_loss = total_loss + config.model.L_int_loss_weight * L_int_loss
+                
+            # Intervene on concepts and propagate effect to residuals to get L_int_extension loss
+            elif config.model.use_L_int_extension_loss == True:
+                if k == 0:
+                    print("Using L_int_extension_loss with weight: ", config.model.L_int_extension_loss_weight)
+
+                L_int_extension_loss = loss_fn.compute_L_int_extension_loss(
+                    model, triang_cov, c_res_mu, target_true, concepts_true, device, intervention_strategy
+                )
+        
+                total_loss = total_loss + config.model.L_int_extension_loss_weight * L_int_extension_loss
+            
+            if config.model.use_L_int_loss == False:
+                L_int_loss = None
+            elif config.model.use_L_int_extension_loss == False:
+                L_int_extension_loss = None
+                
+            
+
+
 
             # Store predictions
             concepts_pred_probs = concepts_mcmc_probs.mean(-1)
@@ -520,6 +578,8 @@ def validate_one_epoch_scbm_residual(
                 concepts_true,
                 concepts_pred_probs,
                 prec_loss=prec_loss,
+                L_int_loss = L_int_loss,
+                L_int_extension_loss = L_int_extension_loss,  
             )
 
     # Calculate and log metrics
@@ -834,6 +894,9 @@ class Custom_Metrics(Metric):
             "n_samples", default=torch.tensor(0, dtype=torch.int, device=device)
         )
         self.add_state("prec_loss", default=torch.tensor(0.0, device=device))
+        self.add_state("l_int_loss", default=torch.tensor(0.0, device=device))
+        self.add_state("l_int_extension_loss", default=torch.tensor(0.0, device=device))
+
 
     def update(
         self,
@@ -846,6 +909,8 @@ class Custom_Metrics(Metric):
         c_pred_probs: torch.Tensor,
         cov_norm: torch.Tensor = None,
         prec_loss: torch.Tensor = None,
+        L_int_loss: torch.Tensor = None,
+        L_int_extension_loss: torch.Tensor = None,
     ):
         assert c_true.shape == c_pred_probs.shape, f"Shape of true concepts {c_true.shape} and predicted concept probabilities {c_pred_probs.shape} must be the same."
 
@@ -864,7 +929,11 @@ class Custom_Metrics(Metric):
             self.cov_norm += cov_norm * n_samples
         if prec_loss:
             self.prec_loss += prec_loss * n_samples
-
+        if L_int_loss:
+            self.l_int_loss += L_int_loss * n_samples
+        if L_int_extension_loss:
+            self.l_int_extension_loss += L_int_extension_loss * n_samples
+    
     def compute(self, validation=False, config=None):
         y_true = torch.cat(self.y_true, dim=0).cpu()
         c_true = torch.cat(self.c_true, dim=0).cpu()
@@ -886,19 +955,48 @@ class Custom_Metrics(Metric):
         ).sum() / self.n_samples
         target_jaccard = jaccard_score(y_true, y_pred, average="micro")
         concept_jaccard = jaccard_score(c_true, c_pred, average="micro")
-        metrics = dict(
-            {
-                "target_loss": self.target_loss / self.n_samples,
-                "prec_loss": self.prec_loss / self.n_samples,
-                "concepts_loss": self.concepts_loss / self.n_samples,
-                "total_loss": self.total_loss / self.n_samples,
-                "y_accuracy": target_acc,
-                "c_accuracy": concept_acc,
-                "complete_c_accuracy": complete_concept_acc,
-                "target_jaccard": target_jaccard,
-                "concept_jaccard": concept_jaccard,
-            }
-        )
+        if self.l_int_extension_loss != 0:
+            metrics = dict(
+                {
+                    "target_loss": self.target_loss / self.n_samples,
+                    "concepts_loss": self.concepts_loss / self.n_samples,
+                    "l_int_extension_loss": self.l_int_extension_loss / self.n_samples,
+                    "total_loss": self.total_loss / self.n_samples,
+                    "y_accuracy": target_acc,
+                    "c_accuracy": concept_acc,
+                    "complete_c_accuracy": complete_concept_acc,
+                    "target_jaccard": target_jaccard,
+                    "concept_jaccard": concept_jaccard,
+                }
+            )
+        elif self.l_int_loss != 0:  
+            metrics = dict(
+                {
+                    "target_loss": self.target_loss / self.n_samples,
+                    "concepts_loss": self.concepts_loss / self.n_samples,
+                    "l_int_loss": self.l_int_loss / self.n_samples,
+                    "total_loss": self.total_loss / self.n_samples,
+                    "y_accuracy": target_acc,
+                    "c_accuracy": concept_acc,
+                    "complete_c_accuracy": complete_concept_acc,
+                    "target_jaccard": target_jaccard,
+                    "concept_jaccard": concept_jaccard,
+                }
+            )
+        else:
+            metrics = dict(
+                {
+                    "target_loss": self.target_loss / self.n_samples,
+                    "prec_loss": self.prec_loss / self.n_samples,
+                    "concepts_loss": self.concepts_loss / self.n_samples,
+                    "total_loss": self.total_loss / self.n_samples,
+                    "y_accuracy": target_acc,
+                    "c_accuracy": concept_acc,
+                    "complete_c_accuracy": complete_concept_acc,
+                    "target_jaccard": target_jaccard,
+                    "concept_jaccard": concept_jaccard,
+                }
+            )
 
         if self.cov_norm != 0:
             metrics = metrics | {"covariance_norm": self.cov_norm / self.n_samples}

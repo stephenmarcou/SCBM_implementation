@@ -2201,6 +2201,7 @@ class SCBM_Strategy:
         
         # I changed
             num_intervened = int(num_intervened.item())
+            
         
         if num_intervened == 0:
             # No intervention
