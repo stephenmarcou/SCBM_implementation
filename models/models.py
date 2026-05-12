@@ -676,6 +676,29 @@ class SCBM_residual(nn.Module):
             y_pred_logits = torch.log(y_pred_probs + 1e-6)
 
         return y_pred_logits
+    
+    def intervene_straight_through_vectorized(self, c_mcmc_probs, c_mcmc_logits):
+        B, C, M = c_mcmc_probs.shape
+
+        c_hard = torch.bernoulli(c_mcmc_probs)
+
+        # forward: hard samples
+        # backward: gradients flow through c_mcmc_probs
+        c_input = c_hard.detach() - c_mcmc_probs.detach() + c_mcmc_probs
+
+        # [B, C, M] -> [B * M, C]
+        c_flat = c_input.permute(0, 2, 1).reshape(B * M, C)
+
+        y_logits_flat = self.head(c_flat)
+
+        if self.pred_dim == 1:
+            y_probs = torch.sigmoid(y_logits_flat).view(B, M, 1).mean(dim=1)
+            return torch.logit(y_probs, eps=1e-6)
+
+        else:
+            y_log_probs = F.log_softmax(y_logits_flat, dim=-1).view(B, M, self.pred_dim)
+            y_pred_log_probs = torch.logsumexp(y_log_probs, dim=1) - math.log(M)
+            return y_pred_log_probs
         
 
 

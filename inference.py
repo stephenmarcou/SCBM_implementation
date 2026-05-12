@@ -66,7 +66,7 @@ def run(config):
 
 
     if config.run_interventions == True:
-        log_file = experiment_path / "intervention_log.txt"
+        log_file = experiment_path / "intervention_log_optimal_conf.txt"
         with open(log_file, "w") as f:
             f.write(f"Intervention log for experiment: {experiment_path}\n")
 
@@ -163,9 +163,9 @@ def run(config):
         elif config.model.model == "scbm":
             intervene = intervene_scbm
         else:
-            #intervene = intervene_scbm_residual
+            intervene = intervene_scbm_residual
             # CHANGE AFTERWARDS
-            intervene = intervene_scbm_residual_optimized
+            #intervene = intervene_scbm_residual_optimized
         # Intervention curves
         print("\nPERFORMING INTERVENTIONS:\n")
         intervene(

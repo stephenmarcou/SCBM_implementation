@@ -60,8 +60,11 @@ def main(device_str="cpu"):
     concepts_true = torch.randint(0, 2, (B, cfg.data.num_concepts), device=device).float()
     concepts_mask = torch.ones_like(concepts_true, device=device)  # intervene on all concepts
 
-    # choose simple_percentile strategy to avoid CPU optimizer path
-    interv = SCBM_Strategy("simple_perc", train_loader=None, model=None, device=device, config=cfg)
+    # Use empirical percentiles from synthetic training-like concept predictions.
+    train_loader = [{"features": torch.randn(32, cfg.data.num_covariates, device=device)}]
+    interv = SCBM_Strategy(
+        "emp_perc", train_loader=train_loader, model=model, device=device, config=cfg
+    )
 
     # compute intervention (this mirrors compute_L_int_extension_loss)
     (
