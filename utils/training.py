@@ -63,7 +63,8 @@ def train_one_epoch_scbm_residual(
 
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
-        strategy = "conf_interval_optimal"
+        #strategy = "conf_interval_optimal"
+        strategy = "emp_perc"
         intervention_strategy = define_strategy(
                 strategy, train_loader, model, device, config
             )
@@ -449,9 +450,9 @@ def validate_one_epoch_scbm_residual(
     
     model.eval()
     
-        # Define intervention strategy for L_int_extension_loss if needed
+    # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
-        strategy = "conf_interval_optimal"
+        strategy = "emp_perc"
         intervention_strategy = define_strategy(
                 strategy, loader, model, device, config
             )

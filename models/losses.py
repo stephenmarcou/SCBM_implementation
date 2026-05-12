@@ -430,12 +430,15 @@ class SCBresLoss(nn.Module):
         intervention_strategy,
     ):
         
-        if device.type == "mps":  # MPS backend has issues with double precision
-                triang_cov = triang_cov.to(torch.float32)
-                c_res_mu = c_res_mu.to(torch.float32)
-        else:
+        # Keep float32 for GPU/MPS - float64 is too slow on GPU
+        # If CPU needs numerical stability, convert only for CPU
+        if device.type == "cpu":
             triang_cov = triang_cov.to(torch.float64)
             c_res_mu = c_res_mu.to(torch.float64)
+        else:
+            # GPU and MPS use float32 for performance
+            triang_cov = triang_cov.to(torch.float32)
+            c_res_mu = c_res_mu.to(torch.float32)
         
         # Retrieve original (pre-intervention) covariance matrix through Cholesky decomposition
         c_res_cov = torch.matmul(

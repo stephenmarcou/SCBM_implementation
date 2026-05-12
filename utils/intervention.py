@@ -2396,6 +2396,9 @@ class ConfIntervalOptimalStrategy:
     def compute_intervened_logits(self, c_mu, c_cov, c_true, c_mask):
         """
         Compute the logits for the intervened-on concepts based on the confidence interval bounds.
+        
+        PERFORMANCE NOTE: This method uses expensive CPU-based scipy optimization.
+        For training with L_int_extension loss, consider using simple_perc strategy instead.
 
         This method finds values that lie on the confidence region boundary and maximize the likelihood
         of the intervened concepts.
