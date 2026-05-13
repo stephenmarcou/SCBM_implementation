@@ -719,7 +719,7 @@ def intervene_scbm_residual_optimized(
     # strategies = config.model.inter_strategy.split(",")
 
     policies = ["random"]
-    strategies = ["conf_interval_optimal"]
+    strategies = ["emp_perc"]
 
     num_interventions = min(config.data.num_concepts, config.model.max_interventions)
 
