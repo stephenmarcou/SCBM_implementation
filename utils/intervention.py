@@ -719,7 +719,10 @@ def intervene_scbm_residual_optimized(
     # strategies = config.model.inter_strategy.split(",")
 
     policies = ["random"]
-    strategies = ["emp_perc"]
+    strategies = [config.model.inter_strategy]
+    print(f"Intervention strategy: {strategies}, policy: {policies}")
+    with open(log_file, "a") as f:
+        f.write(f"Intervention strategy: {strategies}, policy: {policies}\n")
 
     num_interventions = min(config.data.num_concepts, config.model.max_interventions)
 
