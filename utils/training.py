@@ -131,7 +131,7 @@ def train_one_epoch_scbm_residual(
             
         if config.model.use_L_int_loss == False:
             L_int_loss = None
-        elif config.model.use_L_int_extension_loss == False:
+        if config.model.use_L_int_extension_loss == False:
             L_int_extension_loss = None
 
 
@@ -561,10 +561,11 @@ def validate_one_epoch_scbm_residual(
             
             if config.model.use_L_int_loss == False:
                 L_int_loss = None
-            elif config.model.use_L_int_extension_loss == False:
+            if config.model.use_L_int_extension_loss == False:
                 L_int_extension_loss = None
+
                 
-            
+
 
 
 
