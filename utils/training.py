@@ -9,12 +9,14 @@ from torch import nn
 from tqdm import tqdm
 from torchmetrics import Metric
 import wandb
+import os
 
 from utils.metrics import calc_target_metrics, calc_concept_metrics
 from utils.plotting import compute_and_plot_heatmap
 from utils.utils import numerical_stability_check
 
 from utils.intervention import define_strategy
+from pathlib import Path
 
 def train_one_epoch_scbm_residual(
     train_loader, model, optimizer, mode, metrics, epoch, config, loss_fn, device, log_file = None
@@ -434,21 +436,13 @@ def validate_one_epoch_scbm_residual(
         - Metrics are computed and logged at the end of the validation epoch.
         - During testing, the function generates and plots a heatmap of the concept correlation matrix.
     """
-    # if save_concept_target_pred:
-    #     save_path = log_file.with_name("concept_target_predictions.pt")
-    #     with open(save_path, "wb") as f:
-    #         torch.save(
-    #             {
-    #                 "concepts_true": [],
-    #                 "concepts_pred": [],
-    #                 "targets_true": [],
-    #                 "targets_pred": [],
-    #             },
-    #             f,
-    #         )
+
     
     
     model.eval()
+
+    classwise_covariances = {}
+    classwise_counts = {}
     
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
@@ -483,47 +477,39 @@ def validate_one_epoch_scbm_residual(
                 
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
             
-            # Just to check if concept and target accuracies are correct
-            # if save_concept_target_pred:
-            #     # Load existing predictions
-            #     with open(save_path, "rb") as f:
-            #         data = torch.load(f)
-
-                
-            #     concepts_probs = concepts_mcmc_probs.mean(-1).cpu()
-            #     concepts_preds_binary = (concepts_probs > 0.5).int()
-            #     if target_pred_logits.size(1) == 1:
-            #         target_pred = (torch.sigmoid(target_pred_logits.squeeze(1)) > 0.5).int().cpu()
-            #     else:
-            #         target_pred = target_pred_logits.argmax(dim=-1).cpu()
-            #     # Append new predictions
-            #     data["concepts_true"].append(concepts_true.cpu())
-            #     data["concepts_pred"].append(concepts_preds_binary)
-            #     data["targets_true"].append(target_true.cpu())
-            #     data["targets_pred"].append(target_pred)
-
-            #     # Save updated predictions
-            #     with open(save_path, "wb") as f:
-            #         torch.save(data, f)
+   
        
             
             
             # Compute covariance matrix of concepts and residuals
             cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
+            print(f"Covariance matrix shape: {cov.shape}")
 
-            if test and k % (len(loader) // 10) == 0:
-                try:
-                    corr = (cov[0] / cov[0].diag().sqrt()).transpose(
-                        dim0=0, dim1=1
-                    ) / cov[0].diag().sqrt()
-                    matrix = corr.cpu().numpy()
+            batch_class_ids = target_true.detach().cpu().tolist()
+            for sample_idx, class_id in enumerate(batch_class_ids):
+                if class_id not in classwise_covariances:
+                    classwise_covariances[class_id] = cov[sample_idx].detach().cpu().clone()
+                    classwise_counts[class_id] = 1
+                else:
+                    classwise_covariances[class_id] += cov[sample_idx].detach().cpu()
+                    classwise_counts[class_id] += 1
 
-                    compute_and_plot_heatmap(
-                        matrix, concepts_true, concept_names_graph, config
-                    )
+            
 
-                except:
-                    pass
+
+            # if test and k % (len(loader) // 10) == 0:
+            #     try:
+            #         corr = (cov[0] / cov[0].diag().sqrt()).transpose(
+            #             dim0=0, dim1=1
+            #         ) / cov[0].diag().sqrt()
+            #         matrix = corr.cpu().numpy()
+
+            #         compute_and_plot_heatmap(
+            #             matrix, concepts_true, concept_names_graph, config
+            #         )
+
+            #     except:
+            #         pass
             
             
             
@@ -599,6 +585,18 @@ def validate_one_epoch_scbm_residual(
     if log_file is not None:
         with open(log_file, "a") as f:
             f.write(prints + "\n")
+
+    if test:
+        averaged_classwise_covariances = {
+            class_id: classwise_covariances[class_id] / classwise_counts[class_id]
+            for class_id in classwise_covariances
+            if classwise_counts.get(class_id, 0) > 0
+        }
+        if averaged_classwise_covariances and log_file is not None:
+            full_path = os.path.join(config.experiment_dir, config.model.model, config.data.dataset, config.inference.ex_name)
+            save_path = os.path.join(full_path, "classwise_covariances_residual.pt")
+            torch.save(averaged_classwise_covariances, save_path)
+            print(f"Saved classwise covariances to {save_path}")
     
     print(prints)
     print()
@@ -655,6 +653,10 @@ def validate_one_epoch_scbm(
         - During testing, the function generates and plots a heatmap of the concept correlation matrix.
     """
     model.eval()
+
+    # Compute classwise covariance matrices
+    classwise_covariances = {}
+    classwise_counts = {}
     with torch.no_grad():
 
         for k, batch in enumerate(
@@ -669,6 +671,15 @@ def validate_one_epoch_scbm(
             )
             # Compute covariance matrix of concepts
             cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
+
+            batch_class_ids = target_true.detach().cpu().tolist()
+            for sample_idx, class_id in enumerate(batch_class_ids):
+                if class_id not in classwise_covariances:
+                    classwise_covariances[class_id] = cov[sample_idx].detach().cpu().clone()
+                    classwise_counts[class_id] = 1
+                else:
+                    classwise_covariances[class_id] += cov[sample_idx].detach().cpu()
+                    classwise_counts[class_id] += 1
 
             if test and k % (len(loader) // 10) == 0:
                 try:
@@ -722,6 +733,19 @@ def validate_one_epoch_scbm(
     if log_file is not None:
         with open(log_file, "a") as f:
             f.write(prints + "\n")
+
+    if test:
+        averaged_classwise_covariances = {
+            class_id: classwise_covariances[class_id] / classwise_counts[class_id]
+            for class_id in classwise_covariances
+            if classwise_counts.get(class_id, 0) > 0
+        }
+        if averaged_classwise_covariances and log_file is not None:
+            save_path = Path(log_file).parent / "classwise_covariances.pt"
+            torch.save(averaged_classwise_covariances, save_path)
+            print(f"Saved classwise covariances to {save_path}")
+            with open(log_file, "a") as f:
+                f.write(f"Saved classwise covariances to {save_path}\n")
     
     print(prints)
     print()
@@ -819,6 +843,20 @@ def validate_one_epoch_cbm(
     if log_file is not None:
         with open(log_file, "a") as f:
             f.write(prints + "\n")
+
+    if test and getattr(config.model, "plot_classwise_cov_heatmaps", True):
+        averaged_classwise_covariances = {
+            class_id: classwise_covariances[class_id] / classwise_counts[class_id]
+            for class_id in classwise_covariances
+            if classwise_counts.get(class_id, 0) > 0
+        }
+        plot_classwise_covariance_heatmaps(
+            averaged_classwise_covariances,
+            concept_names_graph,
+            config,
+            class_names=getattr(config.data, "class_names", None),
+            log_name="Classwise covariance heatmaps (SCBM)",
+        )
 
     print(prints)
     print()

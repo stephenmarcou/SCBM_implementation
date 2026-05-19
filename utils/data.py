@@ -9,11 +9,12 @@ from torch.utils.data import DataLoader
 from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import get_CUB_dataloaders
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
+from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from utils.utils import numerical_stability_check
 
 
-def get_data(config_base, config, gen):
+def get_data(config_base, config, gen, log_file=None):
     """
     Parse the configuration file and return the relevant dataset loaders.
 
@@ -48,6 +49,23 @@ def get_data(config_base, config, gen):
             type=type,
             seed=config_base.seed,
         )
+        
+        
+    elif config.dataset == "synthetic_res_scbm":
+        # indide get_synthetic_datasets_res_scbm you should make a check that either creates new dataset
+        # or loads an existing one 
+        
+        # trainset, validset, testset, data_dir_name = get_synthetic_datasets_res_scbm(
+        #     config=config_base, seed=config_base.seed, log_file=log_file)
+
+        # save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
+        
+        trainset, validset, testset = get_synthetic_datasets_res_scbm(config_base)
+
+        
+
+
+        
     elif config.dataset == "CUB":
         print("CUB DATASET")
         trainset, validset, testset = get_CUB_dataloaders(
@@ -186,3 +204,26 @@ def get_concept_groups(config):
         concept_names_graph = [str(i) for i in range(config.num_concepts)]
 
     return concept_names_graph
+
+
+
+def save_synthetic_data(config, train, val, test, log_file):
+    synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
+    os.makedirs(synthetic_data_dir, exist_ok=True)
+    num = 0
+    for dir_name in os.listdir(synthetic_data_dir):
+        if dir_name.startswith(f"synthetic_data_seed_{config.seed}"):
+            num = max(num, int(dir_name.split("_")[-1].split(".")[0]) + 1)
+    
+    # Save directory to save train val test data
+    dir_name = f"synthetic_data_seed_{config.seed}_{num}"
+    os.makedirs(os.path.join(synthetic_data_dir, dir_name), exist_ok=True)
+    
+    
+    torch.save(train, os.path.join(synthetic_data_dir, dir_name, "train.pt"))
+    torch.save(val, os.path.join(synthetic_data_dir, dir_name, "val.pt"))
+    torch.save(test, os.path.join(synthetic_data_dir, dir_name, "test.pt"))
+
+    
+
+    

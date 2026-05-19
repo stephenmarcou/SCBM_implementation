@@ -105,7 +105,8 @@ def run(config):
     )
     
     # Get concept names for plotting
-    concept_names_graph = get_concept_groups(config.data)
+    if config.data.dataset == "CUB" or config.data.dataset == "cifar10":
+        concept_names_graph = get_concept_groups(config.data)
     
     print(config.data.num_concepts)
     model = create_model(config)
@@ -114,10 +115,6 @@ def run(config):
     model.to(device)
     model.load_state_dict(state_dict)
     model.eval()
-
-
-
-
 
     metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
     loss_fn = create_loss(config)
@@ -191,6 +188,7 @@ def update_pkl_dir_and_num_concepts(config):
         if config.model.model == "scbm_residual":
             config.data.num_residuals = info_line_dict["data"]["num_residuals"]
     
+    # Ensure that the pkl directory exists
     if config.data.dataset == "CUB":
         full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
         if not os.path.exists(full_path_pkl_dir):

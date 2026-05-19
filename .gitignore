@@ -172,6 +172,7 @@ multirun/
 
 ### I added
 datasets/CUB/*
+datasets/synthetic_res_scbm/*
 scbm_implementation_venv/
 class_attr_data_10/
 *.pth*.pth
@@ -185,3 +186,4 @@ venv_cluster
 requirements_cluster.txt
 requirements_cluster_relaxed.txt
 datasets/cifar100/*
+plots/*

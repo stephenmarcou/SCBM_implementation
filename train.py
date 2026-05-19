@@ -36,6 +36,7 @@ from utils.training import (
 from utils.utils import reset_random_seeds
 from datasets.CUB_dataset import create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
 
+#from datasets.synthetic_dataset_res_scbm import create_synthetic_datasets_res_scbm, load_saved_synthetic_data
 
 def train(config):
     """
@@ -103,7 +104,6 @@ def train(config):
     )
     
     
-    
     experiment_path.mkdir(parents=True)
     config.experiment_dir = str(experiment_path)
     print("Experiment path: ", experiment_path)
@@ -143,6 +143,7 @@ def train(config):
         config,
         config.data,
         gen,
+        log_file=log_file
     )
 
     # Get concept names for plotting
@@ -424,8 +425,7 @@ def train(config):
 
 
 
-def pkl_dir_valid(config):
-
+def check_CUB_data(config):
     full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
 
 
@@ -445,6 +445,16 @@ def pkl_dir_valid(config):
         # In case we are using incomplete dataset, we need to update the number of concepts in the config based on the dataset we are loading
         config.data.num_concepts = len(train_data[0]["attribute_label"])
         
+def check_synthetic_res_scbm_data(config):
+    if config.data.data_dir_name is not None:
+        full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.data_dir_name)
+        if not os.path.exists(full_path):   
+            raise FileNotFoundError(f"Synthetic dataset directory {full_path} does not exist.")
+        train, val, test = load_saved_synthetic_data(config)
+        update_config_data_properties_from_dataset(config, train, val, test, config.data.data_dir_name)
+    else:
+        create_synthetic_datasets_res_scbm(config, seed=config.seed)
+    
         
     
 def check_cluster():
@@ -482,10 +492,12 @@ def main(config: DictConfig):
     
     check_cluster()
     update_config_paths(config)
-    if config.incomplete:
-        print("Incomplete run")
-        pkl_dir_valid(config)
-    
+    if config.incomplete and config.data.dataset == "CUB":
+        print("Incomplete CUB run")
+        check_CUB_data(config)
+        
+    # if config.data.dataset == "synthetic_res_scbm":
+    #     check_synthetic_res_scbm_data(config)
  
     project_dir = Path(__file__).absolute().parent
     print("Project directory:", project_dir)

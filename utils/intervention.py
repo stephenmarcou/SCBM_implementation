@@ -1719,40 +1719,7 @@ class RandomSubsetInterventionPolicy:
     A policy for randomly selecting concepts to intervene on.
     """
     
-    # def compute_intervention_mask(self, concepts_mask, **kwargs):
-    #     """
-    #     Generate a mask for intervening on a randomly selected concepts, one at a time.
-
-    #     Args:
-    #         concepts_mask (torch.Tensor): A tensor indicating which concepts are already masked (intervened).
-    #                                       Shape: (batch_size, num_concepts)
-
-    #     Returns:
-    #         torch.Tensor: An updated tensor with one additional masked concept.
-    #                       Shape: (batch_size, num_concepts)
-    #     """
-    #     num_noninterv_concepts = concepts_mask.shape[1] - concepts_mask.sum(1)[0]
-    #     num_noninterv_concepts = int(num_noninterv_concepts.item()) # I changed
-    #     interv_indices = torch.randint(
-    #         low=0,
-    #         high=num_noninterv_concepts,
-    #         size=(concepts_mask.shape[0],),
-    #         device=concepts_mask.device,
-    #     )
-
-    #     # Adjust for concepts that are already masked
-    #     non_masked_indices = torch.where(concepts_mask == 0)[1].reshape(
-    #         -1, num_noninterv_concepts
-    #     )
-    #     interv_indices_adjusted = non_masked_indices[
-    #         torch.arange(concepts_mask.shape[0]), interv_indices
-    #     ]
-
-    #     concepts_mask[torch.arange(concepts_mask.shape[0]), interv_indices_adjusted] = 1
-
-    #     assert torch.all(concepts_mask.sum(1) == concepts_mask.sum(1)[0])
-    #     return concepts_mask
-    
+ 
     
     def compute_intervention_mask(self,concepts_mask, num_concepts=None, residual_model = False, **kwargs):
         """
