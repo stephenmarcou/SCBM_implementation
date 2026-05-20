@@ -60,7 +60,7 @@ def get_data(config_base, config, gen, log_file=None):
 
         # save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
         
-        trainset, validset, testset = get_synthetic_datasets_res_scbm(config_base)
+        trainset, validset, testset = get_synthetic_datasets_res_scbm(config_base, log_file=log_file)
 
         
 

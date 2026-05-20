@@ -10,22 +10,22 @@ dataset: 'synthetic_res_scbm' # Name of the dataset
 alpha: 1.0 # Weight of the observed concept component in the label generation process
 beta: 1.0 # Weight of the residual component in the label generation process
 gamma: 0 # Weight of the interaction component in the label generation process, set to 0 to disable interactions
-task_sparsity_concepts: 0.1 # Sparsity of the task weights for observed concepts, i.e. the proportion of observed concepts that are relevant for the task
-task_sparsity_residuals: 0.1 # Sparsity of the task weights for residual concepts, i.e. the proportion of residual concepts that are relevant for the task
+task_sparsity_concepts: 1.0 # Sparsity of the task weights for observed concepts, i.e. the proportion of observed concepts that are relevant for the task
+task_sparsity_residuals: 0.5 # Sparsity of the task weights for residual concepts, i.e. the proportion of residual concepts that are relevant for the task
 rho_cr: 0.5 # Correlation between observed concepts and residual factors
 sigma_x: 1.0 # Standard deviation of the noise in the covariates
 latent_rank: 10 # Rank of the latent structure in the covariance of the concept and residual factors, set to 0 to have no latent structure
 num_covariates: 1500 # Dimensionality of the covariates (x) for each data point
-
-
-
-# Samples
 n_samples: 50000 # Total number of samples in the dataset
 train_ratio: 0.6 # Proportion of samples in the training set
 val_ratio: 0.2 # Proportion of samples in the validation set, test ratio
-num_concepts: 100 # Number of observed concepts
-num_residuals: 25 # Number of residual factors
+obs_dim: 100 # Number of observed concepts for data generation
+hid_dim: 25 # Number of residual factors for data generation
 num_classes: 2 # Number of classes for the target variable
+
+# Model parameters (not used for data generation, but needed to initialize the model)
+num_concepts: 100 # Number of observed concepts (same as obs_dim for data generation)
+num_residuals: 25 # Number of residual factors (same as hid_dim for data generation)
 
 # Data directory path
 data_dir_name: null 

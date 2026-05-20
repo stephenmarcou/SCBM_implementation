@@ -103,13 +103,14 @@ def train(config):
         Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
     )
     
-    
-    experiment_path.mkdir(parents=True)
-    config.experiment_dir = str(experiment_path)
-    print("Experiment path: ", experiment_path)
+ 
     
     # I changed
     if config.save_model:
+        experiment_path.mkdir(parents=True)
+        config.experiment_dir = str(experiment_path)
+        print("Experiment path: ", experiment_path)
+        
         log_file = join(experiment_path, "log.txt")
         with open(log_file, "w") as f:
             f.write(str(config) + "\n\n")  # Log the config at the beginning of the log file
@@ -209,10 +210,12 @@ def train(config):
                 f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}",
                 flush=True,
             )
-            with open(log_file, "a") as f:
-                f.write(
-                    f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}\n"
-                )
+            
+            if config.save_model:
+                with open(log_file, "a") as f:
+                    f.write(
+                        f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}\n"
+                    )
         
         return best_val_acc, epochs_without_improvement, should_stop
 

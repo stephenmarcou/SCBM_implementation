@@ -37,8 +37,8 @@ class SyntheticResidualSCBMDataset(Dataset):
         n_samples=50_000,
         indices=None,
         num_covariates=1500,
-        num_concepts=75,
-        num_residuals=25,
+        obs_dim=75,
+        hid_dim=25,
         latent_rank=10,
         alpha=1.0,
         beta=1.0,
@@ -53,9 +53,9 @@ class SyntheticResidualSCBMDataset(Dataset):
 
         self.n_samples = n_samples
         self.num_covariates = num_covariates
-        self.num_concepts = num_concepts
-        self.num_residuals = num_residuals
-        self.total_dim = self.num_concepts + self.num_residuals
+        self.obs_dim = obs_dim
+        self.hid_dim = hid_dim
+        self.total_dim = self.obs_dim + self.hid_dim
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
@@ -77,8 +77,8 @@ class SyntheticResidualSCBMDataset(Dataset):
         # 1. Build covariance matrix for latent concept logits
         # ------------------------------------------------------------
         # Sigma = self._make_block_covariance(
-        #     c_obs_dim=self.num_concepts,
-        #     c_hid_dim=self.num_residuals,
+        #     c_obs_dim=self.obs_dim,
+        #     c_hid_dim=self.hid_dim,
         #     latent_rank=latent_rank,
         #     rho_cr=rho_cr,
         #     rng=rng,
@@ -93,32 +93,30 @@ class SyntheticResidualSCBMDataset(Dataset):
         #     size=n_samples,
         # )
 
-        # eta_concepts = eta[:, :self.num_concepts]
-        # eta_residuals = eta[:, self.num_concepts:]
+        # eta_concepts = eta[:, :self.obs_dim]
+        # eta_residuals = eta[:, self.obs_dim:]
         
         
         # ------------------------------------------------------------
         # 2.1 Alternative sampling method with clearer dependency structure between concepts and residuals 
         # ------------------------------------------------------------
         # eta_residuals = rho * eta_concepts + sqrt(1 - rho^2) * epsilon, where epsilon is independent noise
-        eta_concepts = rng.normal(size=(n_samples, num_concepts))
-        epsilon = rng.normal(size=(n_samples, num_residuals))
+        eta_concepts = rng.normal(size=(n_samples, self.obs_dim))
+        epsilon = rng.normal(size=(n_samples, self.hid_dim))
 
-        eta_residuals = np.zeros((n_samples, num_residuals))
-
-        rho = 0.8
+        eta_residuals = np.zeros((n_samples, self.hid_dim))
 
         # residual j is linked to concept i
-        num_pairs = int(min(num_concepts, num_residuals)/2)
-        concept_indices = rng.choice(num_concepts, size=num_pairs, replace=False)
-        residual_indices = rng.choice(num_residuals, size=num_pairs, replace=False)
+        num_pairs = int(min(self.obs_dim, self.hid_dim)/2)
+        concept_indices = rng.choice(self.obs_dim, size=num_pairs, replace=False)
+        residual_indices = rng.choice(self.hid_dim, size=num_pairs, replace=False)
 
         concept_to_residual_pairs = list(zip(concept_indices.tolist(), residual_indices.tolist()))
 
         for i, j in concept_to_residual_pairs:
             eta_residuals[:, j] = (
-                rho * eta_concepts[:, i]
-                + np.sqrt(1 - rho**2) * epsilon[:, j]
+                self.rho_cr * eta_concepts[:, i]
+                + np.sqrt(1 - self.rho_cr**2) * epsilon[:, j]
             )
             
         eta = np.concatenate([eta_concepts, eta_residuals], axis=1)
@@ -151,19 +149,18 @@ class SyntheticResidualSCBMDataset(Dataset):
         
         # Create sparse random task weights for observed and hidden concepts
         w_concepts = self._make_sparse_weights(
-            dim=self.num_concepts,
+            dim=self.obs_dim,
             sparsity=task_sparsity_concepts,
             rng=rng,
         )
 
         w_residuals = self._make_sparse_weights(
-            dim=self.num_residuals,
+            dim=self.hid_dim,
             sparsity=task_sparsity_residuals,
             rng=rng,
         )
         
 
-        
         
         
         # Compute score components from observed and hidden concepts (residual factors)
@@ -172,11 +169,11 @@ class SyntheticResidualSCBMDataset(Dataset):
 
         # Compute interaction term if gamma > 0
         if gamma != 0.0:
-            A = rng.normal(size=(self.num_concepts, self.num_residuals))
-            A = A / np.sqrt(self.num_concepts * self.num_residuals)
+            A = rng.normal(size=(self.obs_dim, self.hid_dim))
+            A = A / np.sqrt(self.obs_dim * self.hid_dim)
             s_interaction = np.sum((concepts @ A) * residuals, axis=1)
         else:
-            A = np.zeros((self.num_concepts, self.num_residuals))
+            A = np.zeros((self.obs_dim, self.hid_dim))
             s_interaction = np.zeros(n_samples)
 
         s = alpha * s_concepts + beta * s_residuals + gamma * s_interaction
@@ -203,6 +200,8 @@ class SyntheticResidualSCBMDataset(Dataset):
         self.A = torch.tensor(A, dtype=torch.float32)
         self.threshold = float(threshold)
         self.concepts_linked_to_residuals = concept_to_residual_pairs
+        
+        
         
         if indices is not None:
             self.x = self.x[indices]
@@ -352,8 +351,8 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         n_samples=config.data.n_samples,
         indices = indices_train,
         num_covariates=config.data.num_covariates,
-        num_concepts=config.data.num_concepts,
-        num_residuals=config.data.num_residuals,
+        obs_dim=config.data.obs_dim,
+        hid_dim=config.data.hid_dim,
         latent_rank=config.data.latent_rank,
         alpha=config.data.alpha,
         beta=config.data.beta,
@@ -369,8 +368,8 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         n_samples=config.data.n_samples,
         indices = indices_val,
         num_covariates=config.data.num_covariates,
-        num_concepts=config.data.num_concepts,
-        num_residuals=config.data.num_residuals,
+        obs_dim=config.data.obs_dim,
+        hid_dim=config.data.hid_dim,
         latent_rank=config.data.latent_rank,    
         alpha=config.data.alpha,
         beta=config.data.beta,
@@ -386,8 +385,8 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         n_samples=config.data.n_samples,
         indices = indices_test,
         num_covariates=config.data.num_covariates,
-        num_concepts=config.data.num_concepts,
-        num_residuals=config.data.num_residuals,
+        obs_dim=config.data.obs_dim,
+        hid_dim=config.data.hid_dim,
         latent_rank=config.data.latent_rank,
         alpha=config.data.alpha,
         beta=config.data.beta,
@@ -399,9 +398,14 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         seed=seed,  
     )
     
-    with open(log_file, "a") as f:
-        f.write(f"Concepts linked to residuals (concept index, residual index): {train_dataset.concepts_linked_to_residuals}\n")
-    
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(f"Concepts linked to residuals (concept index, residual index): {train_dataset.concepts_linked_to_residuals}\n")
+            f.write(f"Task weight s for concepts: {train_dataset.w_obs}\n")
+            f.write(f"Task weight s for residuals: {train_dataset.w_hid}\n")
+            f.write(f"rho_cr (correlation between linked concepts and residuals): {train_dataset.rho_cr}\n")
+            f.write(f"alpha: {train_dataset.alpha}, beta: {train_dataset.beta}, gamma: {train_dataset.gamma}\n")
+            
     
     # Save the generated dataset for reproducibility and analysis
     #data_dir_name = save_synthetic_data(config, train_dataset, valid_dataset, test_dataset, log_file=log_file)
@@ -435,8 +439,8 @@ def save_synthetic_data(config, train, val, test):
     with open(info_file_path, "w") as f:
         f.write(f"num_samples: {config.data.n_samples}\n")
         f.write(f"num_covariates: {config.data.num_covariates}\n")
-        f.write(f"num_concepts: {config.data.num_concepts}\n")
-        f.write(f"num_residuals: {config.data.num_residuals}\n")
+        f.write(f"obs_dim: {config.data.obs_dim}\n")
+        f.write(f"hid_dim: {config.data.hid_dim}\n")
         f.write(f"latent_rank: {config.data.latent_rank}\n")
         f.write(f"alpha: {config.data.alpha}\n")
         f.write(f"beta: {config.data.beta}\n")
@@ -461,8 +465,8 @@ def create_synthetic_datasets_res_scbm(config, seed=0):
 
 
 def update_config_data_properties_from_dataset(config, train, val, test, data_dir_name):
-    config.data.num_concepts = train.num_concepts
-    config.data.num_residuals = train.num_residuals
+    config.data.obs_dim = train.obs_dim
+    config.data.hid_dim = train.hid_dim
     config.data.num_covariates = train.num_covariates
     config.data.n_samples = train.n_samples + val.n_samples + test.n_samples
     config.data.train_ratio = train.n_samples / config.data.n_samples
