@@ -86,14 +86,17 @@ def train(config):
     # I Changed
     if config.save_name is not None:
         ex_name = config.save_name + "_" + ex_name
-        
-    elif config.incomplete and config.remove_attribute_groups:
-        ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
-    elif config.incomplete and not config.remove_attribute_groups:
-        ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
-    else:
-        ex_name = "complete" + ex_name
     
+    if config.data.dataset == "CUB":    
+        if config.incomplete and config.remove_attribute_groups:
+            ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
+        elif config.incomplete and not config.remove_attribute_groups:
+            ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
+        else:
+            ex_name = "complete_" + ex_name
+    
+    elif config.data.dataset == "synthetic_res_scbm":
+        ex_name = "synthetic_res_scbm_" + ex_name
     
         
     if config.hyperparameter_search:
