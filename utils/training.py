@@ -483,7 +483,7 @@ def validate_one_epoch_scbm_residual(
             
             # Compute covariance matrix of concepts and residuals
             cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
-            print(f"Covariance matrix shape: {cov.shape}")
+            #print(f"Covariance matrix shape: {cov.shape}")
 
             batch_class_ids = target_true.detach().cpu().tolist()
             for sample_idx, class_id in enumerate(batch_class_ids):
@@ -593,7 +593,7 @@ def validate_one_epoch_scbm_residual(
             if classwise_counts.get(class_id, 0) > 0
         }
         if averaged_classwise_covariances and log_file is not None:
-            full_path = os.path.join(config.experiment_dir, config.model.model, config.data.dataset, config.inference.ex_name)
+            full_path = os.path.dirname(log_file)
             save_path = os.path.join(full_path, "classwise_covariances_residual.pt")
             torch.save(averaged_classwise_covariances, save_path)
             print(f"Saved classwise covariances to {save_path}")

@@ -104,7 +104,7 @@ class SyntheticResidualSCBMDataset(Dataset):
         eta_concepts = rng.normal(size=(n_samples, self.obs_dim))
         epsilon = rng.normal(size=(n_samples, self.hid_dim))
 
-        eta_residuals = np.zeros((n_samples, self.hid_dim))
+        eta_residuals = epsilon.copy()  # Initialize with independent noise
 
         # residual j is linked to concept i
         num_pairs = int(min(self.obs_dim, self.hid_dim)/2)
