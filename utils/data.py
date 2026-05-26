@@ -60,8 +60,11 @@ def get_data(config_base, config, gen, log_file=None):
 
         # save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
         
+        
         trainset, validset, testset = get_synthetic_datasets_res_scbm(config_base, log_file=log_file)
 
+        if config.save_data:
+            save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
         
 
 
@@ -207,23 +210,59 @@ def get_concept_groups(config):
 
 
 
+# def save_synthetic_data(config, train, val, test, log_file):
+#     synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
+#     os.makedirs(synthetic_data_dir, exist_ok=True)
+#     num = 0
+#     for dir_name in os.listdir(synthetic_data_dir):
+#         if dir_name.startswith(f"synthetic_data_seed_{config.seed}"):
+#             num = max(num, int(dir_name.split("_")[-1].split(".")[0]) + 1)
+    
+#     # Save directory to save train val test data
+#     dir_name = f"synthetic_data_seed_{config.seed}_{num}"
+#     os.makedirs(os.path.join(synthetic_data_dir, dir_name), exist_ok=True)
+    
+    
+#     torch.save(train, os.path.join(synthetic_data_dir, dir_name, "train.pt"))
+#     torch.save(val, os.path.join(synthetic_data_dir, dir_name, "val.pt"))
+#     torch.save(test, os.path.join(synthetic_data_dir, dir_name, "test.pt"))
+
+
 def save_synthetic_data(config, train, val, test, log_file):
     synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
     os.makedirs(synthetic_data_dir, exist_ok=True)
-    num = 0
-    for dir_name in os.listdir(synthetic_data_dir):
-        if dir_name.startswith(f"synthetic_data_seed_{config.seed}"):
-            num = max(num, int(dir_name.split("_")[-1].split(".")[0]) + 1)
-    
-    # Save directory to save train val test data
-    dir_name = f"synthetic_data_seed_{config.seed}_{num}"
-    os.makedirs(os.path.join(synthetic_data_dir, dir_name), exist_ok=True)
-    
-    
-    torch.save(train, os.path.join(synthetic_data_dir, dir_name, "train.pt"))
-    torch.save(val, os.path.join(synthetic_data_dir, dir_name, "val.pt"))
-    torch.save(test, os.path.join(synthetic_data_dir, dir_name, "test.pt"))
 
-    
+    # Save dir name
+    hostname = os.uname()[1]
+    if "biomed" in hostname:
+        save_name = "cluster_"
+    else:
+        save_name = "local_"
+    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_rho_{config.data.rho_cr}_seed_{config.seed}"
+    for dir_name in os.listdir(synthetic_data_dir):
+        if dir_name.startswith(save_name):
+            save_name += "_v"
+            version = 1
+            while True:
+                if not os.path.exists(os.path.join(synthetic_data_dir, save_name + str(version))):
+                    save_name += str(version)
+                    break
+                version += 1
+    save_dir = os.path.join(synthetic_data_dir, save_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+    datasets = {"train": train, "val": val, "test": test}
+    for split, dataset in datasets.items():
+        dataset_dir = os.path.join(save_dir, split)
+        os.makedirs(dataset_dir, exist_ok=True)
+        torch.save(dataset.x, os.path.join(dataset_dir, "x.pt"))
+        torch.save(dataset.concepts, os.path.join(dataset_dir, "concepts.pt"))
+        torch.save(dataset.residuals, os.path.join(dataset_dir, "residuals.pt"))
+        torch.save(dataset.y, os.path.join(dataset_dir, "y.pt"))
+        torch.save(dataset.s, os.path.join(save_dir, "s.pt"))
+        
+    with open(log_file, "a") as f:
+        f.write(f"data_dir: {save_dir}\n")
+        
 
     

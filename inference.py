@@ -102,16 +102,18 @@ def run(config):
     config,
     config.data,
     gen,
+    log_file=log_file_inference if config.run_inference else log_file
     )
     
     # Get concept names for plotting
-    if config.data.dataset == "CUB" or config.data.dataset == "cifar10":
-        concept_names_graph = get_concept_groups(config.data)
+    concept_names_graph = get_concept_groups(config.data)
+   
     
     print(config.data.num_concepts)
     model = create_model(config)
     saved_model_path = experiment_path / "model.pth"
     state_dict = torch.load(saved_model_path, map_location=device)
+    print(f"Loaded model state dict from {saved_model_path}")
     model.to(device)
     model.load_state_dict(state_dict)
     model.eval()
@@ -181,12 +183,19 @@ def update_pkl_dir_and_num_concepts(config):
         lines = f.readlines()
         info_line = lines[0]
         info_line_dict = ast.literal_eval(info_line)
-        pkl_file_dir = info_line_dict["data"]["pkl_file_dir"]
-        pkl_file_dir = pkl_file_dir.strip("/")
-        config.data.pkl_file_dir = pkl_file_dir
+        if config.data.dataset != "synthetic_res_scbm":
+            pkl_file_dir = info_line_dict["data"]["pkl_file_dir"]
+            pkl_file_dir = pkl_file_dir.strip("/")
+            config.data.pkl_file_dir = pkl_file_dir
+        print(f"info_line_dict: {info_line_dict}")
         config.data.num_concepts = info_line_dict["data"]["num_concepts"]
         if config.model.model == "scbm_residual":
             config.data.num_residuals = info_line_dict["data"]["num_residuals"]
+        
+        # For synhetic dataset
+        if config.data.dataset == "synthetic_res_scbm":
+            config.model.encoder_arch = info_line_dict["model"]["encoder_arch"]
+            config.data.save_data = True
     
     # Ensure that the pkl directory exists
     if config.data.dataset == "CUB":

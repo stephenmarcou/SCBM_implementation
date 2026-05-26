@@ -443,6 +443,7 @@ def validate_one_epoch_scbm_residual(
 
     classwise_covariances = {}
     classwise_counts = {}
+    concept_residuals_probabilities_batches = []
     
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
@@ -477,10 +478,10 @@ def validate_one_epoch_scbm_residual(
                 
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
             
-   
-       
-            
-            
+            if config.data.dataset == "synthetic_res_scbm" and config.data.save_predicted_concepts_residuals and test:
+                #residuals_probs = concepts_residuals_mcmc_probs[:, config.data.num_concepts:, :].detach().cpu()
+                concept_residuals_probabilities_batches.append(concepts_residuals_mcmc_probs)
+
             # Compute covariance matrix of concepts and residuals
             cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
             #print(f"Covariance matrix shape: {cov.shape}")
@@ -585,6 +586,15 @@ def validate_one_epoch_scbm_residual(
     if log_file is not None:
         with open(log_file, "a") as f:
             f.write(prints + "\n")
+
+    # Saving checks already done earlier as concept_residuals_probabilities_batches would be empty if
+    # not saving concepts or not synthetic dataset
+    if concept_residuals_probabilities_batches and log_file is not None:
+        log_file_parent = os.path.dirname(log_file)
+        concept_residuals_save_path = os.path.join(log_file_parent, "pred_concepts_residuals_probs.pt")
+        residuals_probs = torch.cat(concept_residuals_probabilities_batches, dim=0)
+        torch.save(residuals_probs, concept_residuals_save_path)
+        print(f"Saved predicted concept residual probabilities to {concept_residuals_save_path}")
 
     if test:
         averaged_classwise_covariances = {
@@ -746,6 +756,8 @@ def validate_one_epoch_scbm(
             print(f"Saved classwise covariances to {save_path}")
             with open(log_file, "a") as f:
                 f.write(f"Saved classwise covariances to {save_path}\n")
+                
+    
     
     print(prints)
     print()

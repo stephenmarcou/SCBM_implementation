@@ -210,6 +210,9 @@ class SyntheticResidualSCBMDataset(Dataset):
             self.y = self.y[indices]
             self.s = self.s[indices]
             self.n_samples = self.x.shape[0]
+            
+            
+
 
     def __len__(self):
         return self.x.shape[0]
@@ -223,6 +226,8 @@ class SyntheticResidualSCBMDataset(Dataset):
             "residuals": self.residuals[idx],
             "score": self.s[idx],
         }
+
+
 
     @staticmethod
     def _make_sparse_weights(dim, sparsity, rng):
@@ -401,8 +406,8 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
     if log_file is not None:
         with open(log_file, "a") as f:
             f.write(f"Concepts linked to residuals (concept index, residual index): {train_dataset.concepts_linked_to_residuals}\n")
-            f.write(f"Task weight s for concepts: {train_dataset.w_obs}\n")
-            f.write(f"Task weight s for residuals: {train_dataset.w_hid}\n")
+            f.write(f"Task weight s for concepts: {train_dataset.w_obs.tolist()}\n")
+            f.write(f"Task weight s for residuals: {train_dataset.w_hid.tolist()}\n")
             f.write(f"rho_cr (correlation between linked concepts and residuals): {train_dataset.rho_cr}\n")
             f.write(f"alpha: {train_dataset.alpha}, beta: {train_dataset.beta}, gamma: {train_dataset.gamma}\n")
             

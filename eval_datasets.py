@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from utils.utils import reset_random_seeds
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from datasets.CUB_dataset import get_CUB_dataloaders
+from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm
 
 
 
@@ -79,7 +80,7 @@ def choose_predictor(model_type, num_concepts, num_classes):
     return head
 
 
-def train_one_epoch(model, train_loader, optimizer, criterion, device):
+def train_one_epoch(config, model, train_loader, optimizer, criterion, device):
     model.train()
     total_loss = 0
     total_correct = 0
@@ -87,6 +88,9 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device):
         #attribute_label, class_label = batch
         class_label = batch["labels"]
         attribute_label = batch["concepts"]
+        if config.model.use_residuals_from_data and "residuals" in batch:
+            residuals = batch["residuals"]
+            attribute_label = torch.cat([attribute_label, residuals], dim=1)
         attribute_label, class_label = attribute_label.to(device), class_label.to(device)
 
         optimizer.zero_grad()
@@ -103,7 +107,7 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device):
     avg_accuracy = total_correct / len(train_loader.dataset)
     return avg_loss, avg_accuracy
 
-def validate_one_epoch(model, val_loader, criterion, device):
+def validate_one_epoch(config, model, val_loader, criterion, device):
     model.eval()
     total_loss = 0
     total_correct = 0
@@ -111,6 +115,10 @@ def validate_one_epoch(model, val_loader, criterion, device):
         for batch in val_loader:
             #attribute_label, class_label = batch
             attribute_label = batch["concepts"]
+            # assess synthetic dataset where we have access to hid_dim as well
+            if config.model.use_residuals_from_data and "residuals" in batch:
+                residuals = batch["residuals"]
+                attribute_label = torch.cat([attribute_label, residuals], dim=1)
             class_label = batch["labels"]
             attribute_label, class_label = attribute_label.to(device), class_label.to(device)
 
@@ -128,13 +136,16 @@ def validate_one_epoch(model, val_loader, criterion, device):
 
 
 
-def get_dataset_num_concepts(dataset, config):
+def get_dataset_num_concepts(dataset):
     """Safely extract num_concepts from dataset or config.
     
-    Works with both native datasets (CUB) and Subset-wrapped datasets (CIFAR).
+    Works with both native datasets (CUB) and Subset-wrapped datasets (CIFAR) and synthetic datasets.
     """
     print(f"Number of concepts: {len(dataset[0]['concepts'])}")
     return len(dataset[0]["concepts"])
+
+
+
 
 
 def get_dataloaders(config, gen):
@@ -149,28 +160,21 @@ def get_dataloaders(config, gen):
             use_full_train_after_tuning=config.data.use_full_train_after_tuning,
         )
         
-        return train_data, val_data, test_data
+
     
     elif dataset == "CUB":
         print("CUB DATASET")
-        
-        # pkl_file_dir = config.data.pkl_file_dir
-        # if config.incomplete:
-        #     full_data_path = os.path.join(config.data.data_path, dataset, "incomplete_data", pkl_file_dir)
-        # else:
-        #     full_data_path = os.path.join(config.data.data_path, dataset, pkl_file_dir)
-        
-        # train_data_path = os.path.join(full_data_path, "train.pkl")
-        # val_data_path = os.path.join(full_data_path, "val.pkl")
-        # test_data_path = os.path.join(full_data_path, "test.pkl")
-        # train_data = CUBDataset(train_data_path)
-        # val_data = CUBDataset(val_data_path)
-        # test_data = CUBDataset(test_data_path)
+    
         
         train_data, val_data, test_data = get_CUB_dataloaders(
             config.data, config.incomplete
         )
-        return train_data, val_data, test_data
+        
+    elif dataset == "synthetic_res_scbm":
+        train_data, val_data, test_data = get_synthetic_datasets_res_scbm(config)
+        
+        
+    return train_data, val_data, test_data
 
 
 
@@ -191,8 +195,14 @@ def train(config):
     # Prepare logging and experiment directory
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
-    pkl_file_dir = config.data.pkl_file_dir.strip("/")  
-    ex_name = pkl_file_dir + "_" + ex_name
+    if config.data.dataset != "synthetic_res_scbm":
+        pkl_file_dir = config.data.pkl_file_dir.strip("/")  
+        ex_name = pkl_file_dir + "_" + ex_name
+    else:
+        pkl_file_dir = None
+    
+    if config.data.dataset == "synthetic_res_scbm":
+        ex_name = f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
 
     
     experiment_path = (
@@ -207,11 +217,12 @@ def train(config):
     
     
     log_file = os.path.join(experiment_path, "log.txt")
-    with open(log_file, "w") as f:
-        f.write(str(config) + "\n\n")  # Log the config at the beginning of the log file
+    # This is rewritten later in code
+    # with open(log_file, "w") as f:
+    #     f.write(str(config) + "\n\n")  # Log the config at the beginning of the log file
 
     
-    # Load data
+    # ---- Load data and create dataloaders ---
     train_data, val_data, test_data = get_dataloaders(config, gen)
         
     
@@ -235,25 +246,50 @@ def train(config):
         shuffle=False,
         num_workers=4  
     )
-
+    print(train_data[0])
     num_classes = config.data.num_classes
     model_type = config.model.model
-    num_concepts = get_dataset_num_concepts(train_data, config)
+    data_type = config.data.dataset
+    num_concepts = len(train_data[0]['concepts'])
+    if data_type == "synthetic_res_scbm":
+        num_residuals = len(train_data[0]['residuals'])
+    else:
+        num_residuals = 0
+    
+
+    
+    
+    
+    
     log_file = os.path.join(experiment_path, "log.txt")
+    use_residuals_from_data = config.model.use_residuals_from_data 
+    
+    
+    
     info_dict = {
         "model_type": model_type,
         "num_concepts": num_concepts,
-        "num_residuals": config.data.num_residuals if model_type == "scbm_residual" else 0,
+        "num_residuals": num_residuals,
         "num_classes": num_classes,
-        "pkl_file_dir": pkl_file_dir
+        "pkl_file_dir": pkl_file_dir,
+        "use_residuals_from_data": use_residuals_from_data
         }
     
     with open(log_file, "w") as f:
         f.write(str(info_dict) + "\n\n")  # Log the config at the beginning of the log file
     
+    if data_type == "synthetic_res_scbm":
+        with open(log_file, "a") as f:
+            f.write(f"Concepts linked to residuals (concept index, residual index): {train_data.concepts_linked_to_residuals}\n")
+            f.write(f"Task weight s for concepts: {train_data.w_obs.tolist()}\n")
+            f.write(f"Task weight s for residuals: {train_data.w_hid.tolist()}\n")
+            f.write(f"rho_cr (correlation between linked concepts and residuals): {train_data.rho_cr}\n")
+            f.write(f"alpha: {train_data.alpha}, beta: {train_data.beta}, gamma: {train_data.gamma}\n")
     
     
-    # Prepare model
+    # ---- Prepare model ----
+    if config.model.use_residuals_from_data:
+        num_concepts += num_residuals
     pred_head = choose_predictor(model_type, num_concepts, num_classes)
     model = pred_head
     model.to(device)
@@ -264,12 +300,12 @@ def train(config):
     
     for epoch in range(config.model.j_epochs):
         if epoch % config.model.validate_per_epoch == 0:
-            avg_loss, avg_accuracy = validate_one_epoch(model, val_loader, criterion, device)
+            avg_loss, avg_accuracy = validate_one_epoch(config, model, val_loader, criterion, device)
             print(f"Epoch {epoch+1}/{config.model.j_epochs}, Val loss: {avg_loss:.4f}, Val accuracy: {avg_accuracy:.4f}")
             with open(log_file, "a") as f:
                 f.write(f"Epoch {epoch+1}/{config.model.j_epochs}, Validation Loss: {avg_loss:.4f}, Validation Accuracy: {avg_accuracy:.4f}\n")
     
-        avg_loss, avg_accuracy = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        avg_loss, avg_accuracy = train_one_epoch(config, model, train_loader, optimizer, criterion, device)
         print(f"Epoch {epoch+1}/{config.model.j_epochs}, Train loss: {avg_loss:.4f}, Train accuracy: {avg_accuracy:.4f}")
         with open(log_file, "a") as f:
             f.write(f"Epoch {epoch+1}/{config.model.j_epochs}, Train Loss: {avg_loss:.4f}, Train Accuracy: {avg_accuracy:.4f}\n")
@@ -277,7 +313,7 @@ def train(config):
     # Save model
     torch.save(model.state_dict(), os.path.join(experiment_path, "model.pth"))
     # Final evaluation on test set
-    avg_loss, avg_accuracy = validate_one_epoch(model, test_loader, criterion, device)
+    avg_loss, avg_accuracy = validate_one_epoch(config, model, test_loader, criterion, device)
     print(f"Final Test Loss: {avg_loss:.4f}, Final Test Accuracy: {avg_accuracy:.4f}")
     with open(log_file, "a") as f:
         f.write(f"Final Test Loss: {avg_loss:.4f}, Final Test Accuracy: {avg_accuracy:.4f}\n")

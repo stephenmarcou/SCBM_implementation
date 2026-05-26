@@ -5,3 +5,5 @@ defaults:
 #         Model
 # --------------------------
 model: "linear_head" 
+# Only applicable for synthetic dataset
+use_residuals_from_data: false # Whether to use the residuals from the dataset (if available)

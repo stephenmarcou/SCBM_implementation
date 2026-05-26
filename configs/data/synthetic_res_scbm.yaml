@@ -5,6 +5,10 @@
 defaults:
   - data_defaults # Inherit data_defaults arguments
 dataset: 'synthetic_res_scbm' # Name of the dataset
+save_data: false # Whether to save the generated dataset to disk 
+save_predicted_concepts_residuals: false # Whether to save the residuals and concepts for each data point, only applicable for synthetic dataset
+
+
 
 # Data generation parameters
 alpha: 1.0 # Weight of the observed concept component in the label generation process
@@ -26,6 +30,8 @@ num_classes: 2 # Number of classes for the target variable
 # Model parameters (not used for data generation, but needed to initialize the model)
 num_concepts: 10 #100 # Number of observed concepts (same as obs_dim for data generation)
 num_residuals: 5 #25 # Number of residual factors (same as hid_dim for data generation)
+
+
 
 # Data directory path
 data_dir_name: null 
