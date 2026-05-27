@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import get_CUB_dataloaders
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
-from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm
+from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from utils.utils import numerical_stability_check
 
@@ -52,19 +52,15 @@ def get_data(config_base, config, gen, log_file=None):
         
         
     elif config.dataset == "synthetic_res_scbm":
-        # indide get_synthetic_datasets_res_scbm you should make a check that either creates new dataset
-        # or loads an existing one 
+        if config.data_dir_name is not None:
+            print(f"Loading synthetic dataset from {config.data_dir_name}")
+            trainset, validset, testset = load_saved_synthetic_data(config)
         
-        # trainset, validset, testset, data_dir_name = get_synthetic_datasets_res_scbm(
-        #     config=config_base, seed=config_base.seed, log_file=log_file)
+        else:
+            trainset, validset, testset = get_synthetic_datasets_res_scbm(config_base, log_file=log_file)
 
-        # save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
-        
-        
-        trainset, validset, testset = get_synthetic_datasets_res_scbm(config_base, log_file=log_file)
-
-        if config.save_data:
-            save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
+            if config.save_data:
+                save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
         
 
 
@@ -259,8 +255,22 @@ def save_synthetic_data(config, train, val, test, log_file):
         torch.save(dataset.concepts, os.path.join(dataset_dir, "concepts.pt"))
         torch.save(dataset.residuals, os.path.join(dataset_dir, "residuals.pt"))
         torch.save(dataset.y, os.path.join(dataset_dir, "y.pt"))
-        torch.save(dataset.s, os.path.join(save_dir, "s.pt"))
+        torch.save(dataset.s, os.path.join(dataset_dir, "s.pt"))
         
+    # Info file
+    info_file = os.path.join(save_dir, "info.txt")
+    # Parent folder of log file
+    log_file_parent = os.path.dirname(log_file)
+    with open(info_file, "w") as f:
+        f.write(f"Concepts linked to residuals (concept index, residual index): {train.concepts_linked_to_residuals}\n")
+        f.write(f"Task weight s for concepts: {train.w_obs.tolist()}\n")
+        f.write(f"Task weight s for residuals: {train.w_hid.tolist()}\n")
+        f.write(f"rho_cr (correlation between linked concepts and residuals): {train.rho_cr}\n")
+        f.write(f"alpha: {train.alpha}, beta: {train.beta}, gamma: {train.gamma}\n")
+        f.write(f"num_concepts: {train.concepts.shape[1]}, num_residuals: {train.residuals.shape[1]}\n")
+        f.write(f"Data created for model saved at: {log_file_parent}\n")
+        
+
     with open(log_file, "a") as f:
         f.write(f"data_dir: {save_dir}\n")
         

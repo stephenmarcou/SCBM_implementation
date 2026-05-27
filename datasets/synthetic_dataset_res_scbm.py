@@ -509,3 +509,59 @@ def load_saved_synthetic_data(config):
     return train, val, test
     
 """
+
+
+import os
+import torch
+from torch.utils.data import DataLoader, Dataset
+
+from datasets.synthetic_dataset import get_synthetic_datasets
+from datasets.CUB_dataset import get_CUB_dataloaders
+from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
+from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm
+from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
+from utils.utils import numerical_stability_check
+
+
+class LoadedSyntheticResidualSCBMDataset(Dataset):
+    def __init__(self, x, concepts, residuals, y, s):
+        self.x = x
+        self.concepts = concepts
+        self.residuals = residuals
+        self.y = y
+        self.s = s
+        self.n_samples = x.shape[0]
+
+    def __len__(self):
+        return self.x.shape[0]
+
+    def __getitem__(self, idx):
+        return {
+            "features": self.x[idx],
+            "concepts": self.concepts[idx],
+            "labels": self.y[idx],
+            "residuals": self.residuals[idx],
+            "score": self.s[idx],
+        }
+
+
+def _load_split_dataset(split_dir):
+    x = torch.load(os.path.join(split_dir, "x.pt"))
+    concepts = torch.load(os.path.join(split_dir, "concepts.pt"))
+    residuals = torch.load(os.path.join(split_dir, "residuals.pt"))
+    y = torch.load(os.path.join(split_dir, "y.pt"))
+    # Later uncomment this because I saved s wrongly before
+    s = torch.load(os.path.join(split_dir, "s.pt"))
+    s = None
+    return LoadedSyntheticResidualSCBMDataset(x, concepts, residuals, y, s)
+
+
+def load_saved_synthetic_data(config):
+    data_dir_root = os.path.join(config.data.data_path, "synthetic_res_scbm")
+    full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
+
+    print(f"Loading existing synthetic_res_scbm dataset from {full_data_dir_path}...")
+    train = _load_split_dataset(os.path.join(full_data_dir_path, "train"))
+    val = _load_split_dataset(os.path.join(full_data_dir_path, "val"))
+    test = _load_split_dataset(os.path.join(full_data_dir_path, "test"))
+    return train, val, test

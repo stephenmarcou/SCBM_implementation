@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from utils.utils import reset_random_seeds
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from datasets.CUB_dataset import get_CUB_dataloaders
-from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm
+from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data
 
 
 
@@ -171,7 +171,10 @@ def get_dataloaders(config, gen):
         )
         
     elif dataset == "synthetic_res_scbm":
-        train_data, val_data, test_data = get_synthetic_datasets_res_scbm(config)
+        if config.data.data_dir_name is not None:
+            train_data, val_data, test_data = load_saved_synthetic_data(config)
+        else:
+            train_data, val_data, test_data = get_synthetic_datasets_res_scbm(config)
         
         
     return train_data, val_data, test_data
@@ -198,12 +201,13 @@ def train(config):
     if config.data.dataset != "synthetic_res_scbm":
         pkl_file_dir = config.data.pkl_file_dir.strip("/")  
         ex_name = pkl_file_dir + "_" + ex_name
-    else:
-        pkl_file_dir = None
+
     
     if config.data.dataset == "synthetic_res_scbm":
-        ex_name = f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
-
+        if config.data.data_dir_name is not None:
+            ex_name = config.data.data_dir_name + f"_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
+        else:
+            ex_name = f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
     
     experiment_path = (
         Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
@@ -265,16 +269,26 @@ def train(config):
     use_residuals_from_data = config.model.use_residuals_from_data 
     
     
-    
-    info_dict = {
-        "model_type": model_type,
-        "num_concepts": num_concepts,
-        "num_residuals": num_residuals,
-        "num_classes": num_classes,
-        "pkl_file_dir": pkl_file_dir,
-        "use_residuals_from_data": use_residuals_from_data
+    if data_type == "synthetic_res_scbm":
+        info_dict = {
+            "model_type": model_type,
+            "num_concepts": num_concepts,
+            "num_residuals": num_residuals,
+            "num_classes": num_classes,
+            "data_dir_name": config.data.data_dir_name,
+            "use_residuals_from_data": use_residuals_from_data
         }
     
+    else:  
+        info_dict = {
+            "model_type": model_type,
+            "num_concepts": num_concepts,
+            "num_residuals": num_residuals,
+            "num_classes": num_classes,
+            "pkl_file_dir": pkl_file_dir,
+            "use_residuals_from_data": use_residuals_from_data
+            }
+        
     with open(log_file, "w") as f:
         f.write(str(info_dict) + "\n\n")  # Log the config at the beginning of the log file
     
@@ -284,7 +298,7 @@ def train(config):
             f.write(f"Task weight s for concepts: {train_data.w_obs.tolist()}\n")
             f.write(f"Task weight s for residuals: {train_data.w_hid.tolist()}\n")
             f.write(f"rho_cr (correlation between linked concepts and residuals): {train_data.rho_cr}\n")
-            f.write(f"alpha: {train_data.alpha}, beta: {train_data.beta}, gamma: {train_data.gamma}\n")
+            f.write(f"alpha: {train_data.alpha}, beta: {train_data.beta}, gamma: {train_data.gamma}\n\n")
     
     
     # ---- Prepare model ----
