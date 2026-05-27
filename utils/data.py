@@ -234,7 +234,10 @@ def save_synthetic_data(config, train, val, test, log_file):
         save_name = "cluster_"
     else:
         save_name = "local_"
-    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_rho_{config.data.rho_cr}_seed_{config.seed}"
+    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_rho_{config.data.rho_cr}_r_sparsity_{config.data.task_sparsity_residuals}_c_sparsity_{config.data.task_sparsity_concepts}_sigmax_{config.data.sigma_x}_seed_{config.seed}"
+    
+    
+    
     for dir_name in os.listdir(synthetic_data_dir):
         if dir_name.startswith(save_name):
             save_name += "_v"
@@ -267,6 +270,8 @@ def save_synthetic_data(config, train, val, test, log_file):
         f.write(f"Task weight s for residuals: {train.w_hid.tolist()}\n")
         f.write(f"rho_cr (correlation between linked concepts and residuals): {train.rho_cr}\n")
         f.write(f"alpha: {train.alpha}, beta: {train.beta}, gamma: {train.gamma}\n")
+        f.write(f"Task sparsity for concepts: {train.task_sparsity_concepts}, Task sparsity for residuals: {train.task_sparsity_residuals}\n")
+        f.write(f"Sigma_x (noise level in x): {train.sigma_x}\n")
         f.write(f"num_concepts: {train.concepts.shape[1]}, num_residuals: {train.residuals.shape[1]}\n")
         f.write(f"Data created for model saved at: {log_file_parent}\n")
         
