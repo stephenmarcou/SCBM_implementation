@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from sklearn.model_selection import train_test_split
 import random
 import os
+from collections import defaultdict
 
 class SyntheticResidualSCBMDataset(Dataset):
     """
@@ -134,9 +135,20 @@ class SyntheticResidualSCBMDataset(Dataset):
 
         concept_to_residual_pairs = [all_pairs[k] for k in pair_indices]
 
+
+        residual_to_concepts = defaultdict(list)
+
         for i, j in concept_to_residual_pairs:
+            residual_to_concepts[j].append(i)
+
+        for j, concept_ids in residual_to_concepts.items():
+            # Average the effect of all linked concepts for a particular residual
+            signal = eta_concepts[:, concept_ids].mean(axis=1)
+
+            signal = (signal - signal.mean()) / (signal.std() + 1e-8)
+
             eta_residuals[:, j] = (
-                self.rho_cr * eta_concepts[:, i]
+                self.rho_cr * signal
                 + np.sqrt(1 - self.rho_cr**2) * epsilon[:, j]
             )
             
