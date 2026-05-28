@@ -443,6 +443,7 @@ def validate_one_epoch_scbm_residual(
 
     classwise_covariances = {}
     classwise_counts = {}
+    classwise_mu = {}
     concept_residuals_probabilities_batches = []
     
     # Define intervention strategy for L_int_extension_loss if needed
@@ -490,12 +491,14 @@ def validate_one_epoch_scbm_residual(
             for sample_idx, class_id in enumerate(batch_class_ids):
                 if class_id not in classwise_covariances:
                     classwise_covariances[class_id] = cov[sample_idx].detach().cpu().clone()
+                    classwise_mu[class_id] = c_res_mu[sample_idx].detach().cpu().clone()
                     classwise_counts[class_id] = 1
                 else:
                     classwise_covariances[class_id] += cov[sample_idx].detach().cpu()
+                    classwise_mu[class_id] += c_res_mu[sample_idx].detach().cpu()
                     classwise_counts[class_id] += 1
 
-            
+
 
 
             # if test and k % (len(loader) // 10) == 0:
@@ -602,12 +605,27 @@ def validate_one_epoch_scbm_residual(
             for class_id in classwise_covariances
             if classwise_counts.get(class_id, 0) > 0
         }
+        
+        averaged_classwise_mu = {
+            class_id: classwise_mu[class_id] / classwise_counts[class_id]   
+            for class_id in classwise_mu
+            if classwise_counts.get(class_id, 0) > 0
+        }
+        
+        
+        
         if averaged_classwise_covariances and log_file is not None:
             full_path = os.path.dirname(log_file)
-            save_path = os.path.join(full_path, "classwise_covariances_residual.pt")
-            torch.save(averaged_classwise_covariances, save_path)
-            print(f"Saved classwise covariances to {save_path}")
-    
+            save_path_covariance = os.path.join(full_path, "classwise_covariances.pt")
+            torch.save(averaged_classwise_covariances, save_path_covariance)
+            print(f"Saved classwise covariances to {save_path_covariance}")
+            
+        if averaged_classwise_mu and log_file is not None:
+            full_path = os.path.dirname(log_file)
+            save_path_mu = os.path.join(full_path, "classwise_mu.pt")
+            torch.save(averaged_classwise_mu, save_path_mu)
+            print(f"Saved classwise means to {save_path_mu}")
+
     print(prints)
     print()
     metrics.reset()
@@ -855,20 +873,6 @@ def validate_one_epoch_cbm(
     if log_file is not None:
         with open(log_file, "a") as f:
             f.write(prints + "\n")
-
-    if test and getattr(config.model, "plot_classwise_cov_heatmaps", True):
-        averaged_classwise_covariances = {
-            class_id: classwise_covariances[class_id] / classwise_counts[class_id]
-            for class_id in classwise_covariances
-            if classwise_counts.get(class_id, 0) > 0
-        }
-        plot_classwise_covariance_heatmaps(
-            averaged_classwise_covariances,
-            concept_names_graph,
-            config,
-            class_names=getattr(config.data, "class_names", None),
-            log_name="Classwise covariance heatmaps (SCBM)",
-        )
 
     print(prints)
     print()

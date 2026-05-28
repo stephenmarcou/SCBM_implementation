@@ -183,10 +183,28 @@ def update_pkl_dir_and_num_concepts(config):
         lines = f.readlines()
         info_line = lines[0]
         info_line_dict = ast.literal_eval(info_line)
+        
         if config.data.dataset != "synthetic_res_scbm":
             pkl_file_dir = info_line_dict["data"]["pkl_file_dir"]
             pkl_file_dir = pkl_file_dir.strip("/")
             config.data.pkl_file_dir = pkl_file_dir
+            
+            
+            
+        def get_data_dir_name_synthetic_data(experiment_path):
+            with open(os.path.join(experiment_path, "log.txt"), "r") as f:
+                lines = f.readlines()
+                for line in lines:
+                    if line.startswith("data_dir"):
+                        data_dir_name = line.split(":")[1].strip()
+                        data_dir_name = data_dir_name.split("/")[-1]  # Get the last part of the path
+                        return data_dir_name
+            raise ValueError("data_dir not found in log.txt")
+            
+        if config.data.dataset == "synthetic_res_scbm":
+            data_dir_name = get_data_dir_name_synthetic_data(experiment_path)
+            config.data.data_dir_name = data_dir_name
+            
         print(f"info_line_dict: {info_line_dict}")
         config.data.num_concepts = info_line_dict["data"]["num_concepts"]
         if config.model.model == "scbm_residual":
@@ -238,6 +256,7 @@ def update_config_paths(config):
 def main(config: DictConfig):
     check_cluster()
     update_config_paths(config)
+    # Need to change this because it is not incomplete for non-CUB datasets
     if config.incomplete:
         print("Incomplete run")
         update_pkl_dir_and_num_concepts(config)

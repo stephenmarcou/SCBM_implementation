@@ -292,13 +292,10 @@ def train(config):
     with open(log_file, "w") as f:
         f.write(str(info_dict) + "\n\n")  # Log the config at the beginning of the log file
     
+    
+
     if data_type == "synthetic_res_scbm":
-        with open(log_file, "a") as f:
-            f.write(f"Concepts linked to residuals (concept index, residual index): {train_data.concepts_linked_to_residuals}\n")
-            f.write(f"Task weight s for concepts: {train_data.w_obs.tolist()}\n")
-            f.write(f"Task weight s for residuals: {train_data.w_hid.tolist()}\n")
-            f.write(f"rho_cr (correlation between linked concepts and residuals): {train_data.rho_cr}\n")
-            f.write(f"alpha: {train_data.alpha}, beta: {train_data.beta}, gamma: {train_data.gamma}\n\n")
+        open_synthetic_data_log_file_and_write_info(config, log_file, config.data.data_dir_name)
     
     
     # ---- Prepare model ----
@@ -333,6 +330,15 @@ def train(config):
         f.write(f"Final Test Loss: {avg_loss:.4f}, Final Test Accuracy: {avg_accuracy:.4f}\n")
     
     
+    
+def open_synthetic_data_log_file_and_write_info(config, log_file, data_dir_name):
+    data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", data_dir_name)
+    info_file = os.path.join(data_dir_full_path, "info.txt")
+    with open(log_file, "a") as f:
+        with open(info_file, "r") as info_f:
+            info_content = info_f.read()
+            f.write(f"Synthetic dataset info:\n{info_content}\n\n")
+        
     
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")

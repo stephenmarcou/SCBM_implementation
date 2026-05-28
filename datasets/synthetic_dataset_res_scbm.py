@@ -1,3 +1,5 @@
+import itertools
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
@@ -34,20 +36,21 @@ class SyntheticResidualSCBMDataset(Dataset):
 
     def __init__(
         self,
-        n_samples=50_000,
-        indices=None,
-        num_covariates=1500,
-        obs_dim=75,
-        hid_dim=25,
-        latent_rank=10,
-        alpha=1.0,
-        beta=1.0,
-        gamma=0.0,
-        rho_cr=0.3,
-        sigma_x=1.0,
-        task_sparsity_concepts=0.3,
-        task_sparsity_residuals=0.3,
-        seed=0,
+        n_samples,
+        indices,
+        num_covariates,
+        obs_dim,
+        hid_dim,
+        latent_rank,
+        alpha,
+        beta,
+        gamma,
+        rho_cr,
+        sigma_x,
+        task_sparsity_concepts,
+        task_sparsity_residuals,
+        seed,
+        ratio_pairs,
     ):
         super().__init__()
 
@@ -66,7 +69,7 @@ class SyntheticResidualSCBMDataset(Dataset):
         self.task_sparsity_concepts = task_sparsity_concepts
         self.task_sparsity_residuals = task_sparsity_residuals
         self.latent_rank = latent_rank
-        
+        self.ratio_pairs = ratio_pairs
         
         self.indices = indices
 
@@ -106,12 +109,30 @@ class SyntheticResidualSCBMDataset(Dataset):
 
         eta_residuals = epsilon.copy()  # Initialize with independent noise
 
+
         # residual j is linked to concept i
+        """
         num_pairs = int(min(self.obs_dim, self.hid_dim)/2)
         concept_indices = rng.choice(self.obs_dim, size=num_pairs, replace=False)
         residual_indices = rng.choice(self.hid_dim, size=num_pairs, replace=False)
 
         concept_to_residual_pairs = list(zip(concept_indices.tolist(), residual_indices.tolist()))
+        """
+        
+        
+        
+        
+        num_pairs = int(self.obs_dim * self.hid_dim * self.ratio_pairs)
+
+        all_pairs = list(itertools.product(range(self.obs_dim), range(self.hid_dim)))
+
+        pair_indices = rng.choice(
+            len(all_pairs),
+            size=num_pairs,
+            replace=False
+        )
+
+        concept_to_residual_pairs = [all_pairs[k] for k in pair_indices]
 
         for i, j in concept_to_residual_pairs:
             eta_residuals[:, j] = (
@@ -367,6 +388,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         task_sparsity_concepts=config.data.task_sparsity_concepts,
         task_sparsity_residuals=config.data.task_sparsity_residuals,
         seed=seed,
+        ratio_pairs=config.data.ratio_pairs 
     )
     
     valid_dataset = SyntheticResidualSCBMDataset(
@@ -384,6 +406,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         task_sparsity_concepts=config.data.task_sparsity_concepts,
         task_sparsity_residuals=config.data.task_sparsity_residuals,
         seed=seed,  
+        ratio_pairs=config.data.ratio_pairs
     )
     
     test_dataset = SyntheticResidualSCBMDataset(
@@ -400,7 +423,8 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         sigma_x=config.data.sigma_x,
         task_sparsity_concepts=config.data.task_sparsity_concepts,
         task_sparsity_residuals=config.data.task_sparsity_residuals,
-        seed=seed,  
+        seed=seed, 
+        ratio_pairs=config.data.ratio_pairs 
     )
     
     if log_file is not None:
@@ -550,17 +574,13 @@ def _load_split_dataset(split_dir):
     concepts = torch.load(os.path.join(split_dir, "concepts.pt"))
     residuals = torch.load(os.path.join(split_dir, "residuals.pt"))
     y = torch.load(os.path.join(split_dir, "y.pt"))
-    # Later uncomment this because I saved s wrongly before
     s = torch.load(os.path.join(split_dir, "s.pt"))
-    s = None
     return LoadedSyntheticResidualSCBMDataset(x, concepts, residuals, y, s)
 
 
 def load_saved_synthetic_data(config):
     data_dir_root = os.path.join(config.data.data_path, "synthetic_res_scbm")
     full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
-
-    print(f"Loading existing synthetic_res_scbm dataset from {full_data_dir_path}...")
     train = _load_split_dataset(os.path.join(full_data_dir_path, "train"))
     val = _load_split_dataset(os.path.join(full_data_dir_path, "val"))
     test = _load_split_dataset(os.path.join(full_data_dir_path, "test"))

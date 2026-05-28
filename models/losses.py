@@ -428,6 +428,7 @@ class SCBresLoss(nn.Module):
         concepts_true,
         device,
         intervention_strategy,
+        half_intervention=False,
     ):
         
         # Keep float32 for GPU/MPS - float64 is too slow on GPU
@@ -449,6 +450,14 @@ class SCBresLoss(nn.Module):
         
         # Intervene on all concepts
         concepts_mask = torch.ones_like(concepts_true) # [B, num_concepts]
+        
+        # Intervene on half of concepts, randomly selected
+        if half_intervention:
+            B, C = concepts_true.shape
+            concepts_mask = torch.zeros_like(concepts_true)
+            for i in range(B):
+                active_concepts = torch.randperm(C)[: C // 2]
+                concepts_mask[i, active_concepts] = 1
         
         
         (

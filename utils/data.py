@@ -54,11 +54,14 @@ def get_data(config_base, config, gen, log_file=None):
     elif config.dataset == "synthetic_res_scbm":
         if config.data_dir_name is not None:
             print(f"Loading synthetic dataset from {config.data_dir_name}")
-            trainset, validset, testset = load_saved_synthetic_data(config)
+            with open(log_file, "a") as f:
+                f.write(f"Loading existing synthetic dataset from {config.data_dir_name}\n")
+            trainset, validset, testset = load_saved_synthetic_data(config_base)
         
         else:
             trainset, validset, testset = get_synthetic_datasets_res_scbm(config_base, log_file=log_file)
-
+            with open(log_file, "a") as f:
+                f.write(f"Creating new synthetic dataset\n")
             if config.save_data:
                 save_synthetic_data(config_base, trainset, validset, testset, log_file=log_file)
         
@@ -234,7 +237,7 @@ def save_synthetic_data(config, train, val, test, log_file):
         save_name = "cluster_"
     else:
         save_name = "local_"
-    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_rho_{config.data.rho_cr}_r_sparsity_{config.data.task_sparsity_residuals}_c_sparsity_{config.data.task_sparsity_concepts}_sigmax_{config.data.sigma_x}_seed_{config.seed}"
+    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_rho_{config.data.rho_cr}_pair_ratio_{config.data.ratio_pairs}_r_sparsity_{config.data.task_sparsity_residuals}_c_sparsity_{config.data.task_sparsity_concepts}_sigmax_{config.data.sigma_x}_seed_{config.seed}"
     
     
     

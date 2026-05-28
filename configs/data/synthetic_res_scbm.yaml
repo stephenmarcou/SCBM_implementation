@@ -26,6 +26,7 @@ val_ratio: 0.2 # Proportion of samples in the validation set, test ratio
 obs_dim: 10 #100 # Number of observed concepts for data generation
 hid_dim: 5 #25 # Number of residual factors for data generation
 num_classes: 2 # Number of classes for the target variable
+ratio_pairs: 0.5 # Proportion of concept-residual pairs that are correlated, i.e. the proportion of observed concepts that are correlated with a residual factor
 
 # Model parameters (not used for data generation, but needed to initialize the model)
 num_concepts: 10 #100 # Number of observed concepts (same as obs_dim for data generation)
