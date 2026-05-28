@@ -96,7 +96,7 @@ def train(config):
             ex_name = "complete_" + ex_name
     
     elif config.data.dataset == "synthetic_res_scbm":
-        ex_name =  f"alpha_{config.data.alpha}_beta_{config.data.beta}_gamma_{config.data.gamma}_rho_{config.data.rho_cr}_" + ex_name
+        ex_name =  f"alpha_{config.data.alpha}_beta_{config.data.beta}_gamma_{config.data.gamma}_rho_{config.data.rho_cr}_ratio_pairs_{config.data.ratio_pairs}_" + ex_name
     
         
     if config.hyperparameter_search:
