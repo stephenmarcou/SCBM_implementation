@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# This script is for diagnosing gradients in the SCBM model, especially related to the intervention extension.
+# It runs a forward and backward pass through the model with a dummy input and prints out gradient
 import sys
 import torch
 import torch.nn.functional as F

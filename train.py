@@ -38,6 +38,48 @@ from datasets.CUB_dataset import create_random_incomplete_dataset_attr_groups, c
 
 #from datasets.synthetic_dataset_res_scbm import create_synthetic_datasets_res_scbm, load_saved_synthetic_data
 
+
+
+def maybe_save_best_model(config, model, metrics_dict, best_val_acc, best_model_path, epochs_without_improvement, log_file):
+    """
+    Check if validation accuracy improved. If so, save checkpoint and reset patience counter.
+    Returns: (best_val_acc, epochs_without_improvement, should_stop_early)
+    """
+    patience = config.model.early_stopping_patience
+    y_val_acc = float(metrics_dict["y_accuracy"])
+    
+    if y_val_acc > best_val_acc:
+        best_val_acc = y_val_acc
+        epochs_without_improvement = 0
+        if config.save_model:
+            torch.save(model.state_dict(), best_model_path)
+            print(
+                f"New best validation y_accuracy: {best_val_acc:.4f}. Saved checkpoint to {best_model_path}",
+                flush=True,
+            )
+    else:
+        epochs_without_improvement += 1
+    
+    should_stop = epochs_without_improvement >= patience
+    if should_stop:
+        print(
+            f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}",
+            flush=True,
+        )
+        
+        if config.save_model:
+            with open(log_file, "a") as f:
+                f.write(
+                    f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}\n"
+                )
+    
+    return best_val_acc, epochs_without_improvement, should_stop
+
+
+
+
+
+
 def train(config):
     """
     Run the experiments for SCBMs or baselines as defined in the config setting. This method will set up the device, the correct
@@ -83,19 +125,20 @@ def train(config):
     if config.model.get("use_L_int_extension_loss"):
         ex_name = "L_int_extension_loss_weight_" + str(config.model.L_int_extension_loss_weight) + "_" + ex_name
 
-    # I Changed
-    if config.save_name is not None:
-        ex_name = config.save_name + "_" + ex_name
+
     
     if config.data.dataset == "CUB":    
-        if config.incomplete and config.remove_attribute_groups:
+        if config.save_name is not None:
+            ex_name = config.save_name + "_" + ex_name
+        elif not config.save_name and config.incomplete and config.remove_attribute_groups:
             ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
-        elif config.incomplete and not config.remove_attribute_groups:
+        elif not config.save_name and config.incomplete and not config.remove_attribute_groups:
             ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
         else:
             ex_name = "complete_" + ex_name
     
     elif config.data.dataset == "synthetic_res_scbm":
+        ex_name = config.save_name + "_" + ex_name
         ex_name =  f"alpha_{config.data.alpha}_beta_{config.data.beta}_gamma_{config.data.gamma}_rho_{config.data.rho_cr}_ratio_pairs_{config.data.ratio_pairs}_" + ex_name
     
         
@@ -164,6 +207,10 @@ def train(config):
 
     # Initialize model and training objects
     model = create_model(config)
+    
+    # This need to be deleted as we do not intialize the model with empirical covariance
+    # in addition model.sigma_concepts is model.sigma_concepts_residuals in scbm_redidual
+    # --------------------------------
     # Initialize covariance with empirical covariance
     if config.model.get("cov_type") == "empirical":
         model.sigma_concepts = get_empirical_covariance(train_loader).to(device)
@@ -179,7 +226,7 @@ def train(config):
             model.sigma_concepts[diag_idx] = (
                 lower_triangle[rows, cols][diag_idx].expm1().clamp_min(1e-6).log()
             )  # softplus inverse of diag
-
+    # --------------------------------
     model.to(device)
     loss_fn = create_loss(config)
 
@@ -189,38 +236,6 @@ def train(config):
     patience = config.model.early_stopping_patience 
     epochs_without_improvement = 0
 
-    def maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file):
-        """
-        Check if validation accuracy improved. If so, save checkpoint and reset patience counter.
-        Returns: (best_val_acc, epochs_without_improvement, should_stop_early)
-        """
-        y_val_acc = float(metrics_dict["y_accuracy"])
-        if y_val_acc > best_val_acc:
-            best_val_acc = y_val_acc
-            epochs_without_improvement = 0
-            if config.save_model:
-                torch.save(model.state_dict(), best_model_path)
-                print(
-                    f"New best validation y_accuracy: {best_val_acc:.4f}. Saved checkpoint to {best_model_path}",
-                    flush=True,
-                )
-        else:
-            epochs_without_improvement += 1
-        
-        should_stop = epochs_without_improvement >= patience
-        if should_stop:
-            print(
-                f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}",
-                flush=True,
-            )
-            
-            if config.save_model:
-                with open(log_file, "a") as f:
-                    f.write(
-                        f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}\n"
-                    )
-        
-        return best_val_acc, epochs_without_improvement, should_stop
 
     # ---------------------------------
     #            Training
@@ -271,7 +286,9 @@ def train(config):
                 metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
-                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file)
+                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(config=config, model=model, metrics_dict=metrics_dict,
+                                                                                              best_val_acc=best_val_acc, best_model_path=best_model_path, 
+                                                                                              epochs_without_improvement=epochs_without_improvement, log_file=log_file)
                 if should_stop:
                     break
                 
@@ -312,7 +329,9 @@ def train(config):
                 metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
-                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file)
+                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(config=config, model=model, metrics_dict=metrics_dict, 
+                                                                                              best_val_acc=best_val_acc, best_model_path=best_model_path, 
+                                                                                              epochs_without_improvement=epochs_without_improvement, log_file=log_file)
                 if should_stop:
                     break
             train_one_epoch(
@@ -356,7 +375,9 @@ def train(config):
         metrics_dict = validate_one_epoch(
             val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
         )
-        best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(metrics_dict, best_val_acc, epochs_without_improvement, log_file)
+        best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(
+            config=config, model=model, metrics_dict=metrics_dict, best_val_acc=best_val_acc, 
+            best_model_path=best_model_path, epochs_without_improvement=epochs_without_improvement, log_file=log_file)
         if should_stop:
             break
         

@@ -126,7 +126,7 @@ def train_one_epoch_scbm_residual(
                 print("Using L_int_extension_loss with weight: ", config.model.L_int_extension_loss_weight)
 
             L_int_extension_loss = loss_fn.compute_L_int_extension_loss(
-                 model, triang_cov, c_res_mu, target_true, concepts_true, device, intervention_strategy
+                 model, triang_cov, c_res_mu, target_true, concepts_true, device, intervention_strategy, half_intervention=config.model.half_intervention_l_int_extension_loss
             )
     
             total_loss = total_loss + config.model.L_int_extension_loss_weight * L_int_extension_loss
