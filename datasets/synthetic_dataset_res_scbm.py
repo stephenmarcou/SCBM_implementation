@@ -38,20 +38,20 @@ class SyntheticResidualSCBMDataset(Dataset):
     def __init__(
         self,
         n_samples,
-        indices,
         num_covariates,
         obs_dim,
         hid_dim,
         latent_rank,
         alpha,
         beta,
-        gamma,
         rho_cr,
+        rho_cc,
+        rho_rr,
         sigma_x,
-        task_sparsity_concepts,
-        task_sparsity_residuals,
+        task_sparsity_obs,
+        task_sparsity_hid,
         seed,
-        ratio_pairs,
+        indices=None
     ):
         super().__init__()
 
@@ -62,15 +62,15 @@ class SyntheticResidualSCBMDataset(Dataset):
         self.total_dim = self.obs_dim + self.hid_dim
         self.alpha = alpha
         self.beta = beta
-        self.gamma = gamma
         self.rho_cr = rho_cr
+        self.rho_cc = rho_cc
+        self.rho_rr = rho_rr
         self.sigma_x = sigma_x
         self.seed = seed
         
-        self.task_sparsity_concepts = task_sparsity_concepts
-        self.task_sparsity_residuals = task_sparsity_residuals
+        self.task_sparsity_obs = task_sparsity_obs
+        self.task_sparsity_hid = task_sparsity_hid
         self.latent_rank = latent_rank
-        self.ratio_pairs = ratio_pairs
         
         self.indices = indices
 
@@ -80,136 +80,58 @@ class SyntheticResidualSCBMDataset(Dataset):
         # ------------------------------------------------------------
         # 1. Build covariance matrix for latent concept logits
         # ------------------------------------------------------------
-        # Sigma = self._make_block_covariance(
-        #     c_obs_dim=self.obs_dim,
-        #     c_hid_dim=self.hid_dim,
-        #     latent_rank=latent_rank,
-        #     rho_cr=rho_cr,
-        #     rng=rng,
-        # )
+        Sigma = self._create_covariance(
+            c_obs_dim=self.obs_dim,
+            c_hid_dim=self.hid_dim,
+            latent_rank=latent_rank,
+            rho_cr=rho_cr,
+            rho_cc=rho_cc,
+            rho_rr=rho_rr,
+            rng=rng,
+        )
 
         # ------------------------------------------------------------
         # 2. Sample latent variables eta = [eta_obs, eta_hid]
         # ------------------------------------------------------------
-        # eta = rng.multivariate_normal(
-        #     mean=np.zeros(self.total_dim),
-        #     cov=Sigma,
-        #     size=n_samples,
-        # )
-
-        # eta_concepts = eta[:, :self.obs_dim]
-        # eta_residuals = eta[:, self.obs_dim:]
-        
-        
-        # ------------------------------------------------------------
-        # 2.1 Alternative sampling method with clearer dependency structure between concepts and residuals 
-        # ------------------------------------------------------------
-        # eta_residuals = rho * eta_concepts + sqrt(1 - rho^2) * epsilon, where epsilon is independent noise
-        eta_concepts = rng.normal(size=(n_samples, self.obs_dim))
-        epsilon = rng.normal(size=(n_samples, self.hid_dim))
-
-        eta_residuals = epsilon.copy()  # Initialize with independent noise
-
-
-        # residual j is linked to concept i
-        """
-        num_pairs = int(min(self.obs_dim, self.hid_dim)/2)
-        concept_indices = rng.choice(self.obs_dim, size=num_pairs, replace=False)
-        residual_indices = rng.choice(self.hid_dim, size=num_pairs, replace=False)
-
-        concept_to_residual_pairs = list(zip(concept_indices.tolist(), residual_indices.tolist()))
-        """
-        
-        
-        
-        
-        num_pairs = int(self.obs_dim * self.hid_dim * self.ratio_pairs)
-
-        all_pairs = list(itertools.product(range(self.obs_dim), range(self.hid_dim)))
-
-        pair_indices = rng.choice(
-            len(all_pairs),
-            size=num_pairs,
-            replace=False
+        eta = rng.multivariate_normal(
+            mean=np.zeros(self.total_dim),
+            cov=Sigma,
+            size=n_samples,
         )
 
-        concept_to_residual_pairs = [all_pairs[k] for k in pair_indices]
-
-
-        residual_to_concepts = defaultdict(list)
-
-        for i, j in concept_to_residual_pairs:
-            residual_to_concepts[j].append(i)
-
-        for j, concept_ids in residual_to_concepts.items():
-            # Average the effect of all linked concepts for a particular residual
-            signal = eta_concepts[:, concept_ids].mean(axis=1)
-
-            signal = (signal - signal.mean()) / (signal.std() + 1e-8)
-
-            eta_residuals[:, j] = (
-                self.rho_cr * signal
-                + np.sqrt(1 - self.rho_cr**2) * epsilon[:, j]
-            )
-            
-        eta = np.concatenate([eta_concepts, eta_residuals], axis=1)
-        # ------------------------------------------------------------
-        # 3. Threshold latent logits into binary concepts
-        # ------------------------------------------------------`-`-----
+        eta_concepts = eta[:, :self.obs_dim]
+        eta_residuals = eta[:, self.obs_dim:]
+        
+        # Binary concepts
         concepts = (eta_concepts >= 0).astype(np.float32)
         residuals = (eta_residuals >= 0).astype(np.float32)
 
-        # ------------------------------------------------------------
-        # 4. Generate observed input x from all latent factors
-        # ------------------------------------------------------------
+        # Continuous concept intensities / saliencies
+        concept_strengths = np.abs(eta_concepts)
+        residual_strengths = np.abs(eta_residuals)
+
+        # Effective concept values
+        concept_signal = concepts * concept_strengths 
+        residual_signal = residuals * residual_strengths
+
+        # x is generated from concept presence + strength
+        eta_for_x = np.concatenate([concept_signal, residual_signal], axis=1)
+
         x = self._random_mlp_features(
-            eta=eta,
+            eta=eta_for_x,
             num_covariates=num_covariates,
             rng=rng,
         )
-        # Add noise to x to make the task more challenging and prevent perfect fitting
-        x = x + sigma_x * rng.normal(size=x.shape)
-        x = x.astype(np.float32)
 
-        # Standardize x for easier training
-        x = (x - x.mean(axis=0, keepdims=True)) / (
-            x.std(axis=0, keepdims=True) + 1e-8
-        )
+        # Global sparse task weights
+        w_obs = self._make_sparse_weights(self.obs_dim, task_sparsity_obs, rng)
+        w_hid = self._make_sparse_weights(self.hid_dim, task_sparsity_hid, rng)
 
-        # ------------------------------------------------------------
-        # 5. Generate task score s
-        # ------------------------------------------------------------
-        
-        # Create sparse random task weights for observed and hidden concepts
-        w_concepts = self._make_sparse_weights(
-            dim=self.obs_dim,
-            sparsity=task_sparsity_concepts,
-            rng=rng,
-        )
+        # Label depends on expressed concept strength of concepts that are present
+        s_concepts = concept_signal @ w_obs
+        s_residuals = residual_signal @ w_hid
 
-        w_residuals = self._make_sparse_weights(
-            dim=self.hid_dim,
-            sparsity=task_sparsity_residuals,
-            rng=rng,
-        )
-        
-
-        
-        
-        # Compute score components from observed and hidden concepts (residual factors)
-        s_concepts = concepts @ w_concepts
-        s_residuals = residuals @ w_residuals
-
-        # Compute interaction term if gamma > 0
-        if gamma != 0.0:
-            A = rng.normal(size=(self.obs_dim, self.hid_dim))
-            A = A / np.sqrt(self.obs_dim * self.hid_dim)
-            s_interaction = np.sum((concepts @ A) * residuals, axis=1)
-        else:
-            A = np.zeros((self.obs_dim, self.hid_dim))
-            s_interaction = np.zeros(n_samples)
-
-        s = alpha * s_concepts + beta * s_residuals + gamma * s_interaction
+        s = alpha * s_concepts + beta * s_residuals
 
         # ------------------------------------------------------------
         # 6. Convert continuous score to balanced binary label
@@ -227,12 +149,10 @@ class SyntheticResidualSCBMDataset(Dataset):
         self.s = torch.tensor(s, dtype=torch.float32)
         
         # Useful metadata
-        #self.Sigma = torch.tensor(Sigma, dtype=torch.float32)
-        self.w_obs = torch.tensor(w_concepts, dtype=torch.float32)
-        self.w_hid = torch.tensor(w_residuals, dtype=torch.float32)
-        self.A = torch.tensor(A, dtype=torch.float32)
+        self.Sigma = torch.tensor(Sigma, dtype=torch.float32)
+        self.w_obs = torch.tensor(w_obs, dtype=torch.float32)
+        self.w_hid = torch.tensor(w_hid, dtype=torch.float32)
         self.threshold = float(threshold)
-        self.concepts_linked_to_residuals = concept_to_residual_pairs
         
         
         
@@ -242,7 +162,10 @@ class SyntheticResidualSCBMDataset(Dataset):
             self.residuals = self.residuals[indices]
             self.y = self.y[indices]
             self.s = self.s[indices]
+            self.w_obs = self.w_obs
+            self.w_hid = self.w_hid
             self.n_samples = self.x.shape[0]
+
             
             
 
@@ -265,14 +188,16 @@ class SyntheticResidualSCBMDataset(Dataset):
     @staticmethod
     def _make_sparse_weights(dim, sparsity, rng):
         """
-        Creates sparse task weights.
+        Creates global sparse task weights.
 
-        sparsity = fraction of dimensions that are task-relevant.
+        Returns:
+            w: shape (dim,)
+
+        sparsity = fraction of dimensions that are globally task-relevant.
         """
         w = np.zeros(dim, dtype=np.float32)
 
         n_active = max(1, int(sparsity * dim))
-        # list of indices to be active
         active_idx = rng.choice(dim, size=n_active, replace=False)
 
         w[active_idx] = rng.normal(size=n_active)
@@ -283,47 +208,91 @@ class SyntheticResidualSCBMDataset(Dataset):
         return w.astype(np.float32)
 
     @staticmethod
-    def _make_block_covariance(
+    def _create_covariance(
         c_obs_dim,
         c_hid_dim,
         latent_rank,
         rho_cr,
+        rho_cc,
+        rho_rr,
         rng,
     ):
         """
         Creates a positive definite covariance matrix:
 
             Sigma = [[Sigma_obs_obs, Sigma_obs_hid],
-                     [Sigma_hid_obs, Sigma_hid_hid]]
+                    [Sigma_hid_obs, Sigma_hid_hid]]
 
-        rho_cr controls the strength of observed-hidden correlation.
+        where:
+            rho_cc controls observed-observed / concept-concept covariance
+            rho_rr controls hidden-hidden / residual-residual covariance
+            rho_cr controls observed-hidden / concept-residual covariance
         """
 
         total_dim = c_obs_dim + c_hid_dim
+        
+        if latent_rank == 0:
+            Sigma = np.eye(total_dim)
 
-        # Low-rank structure creates correlated concepts
-        # Latent rank
-        # W = [total_dim, latent_rank] with latent_rank << total_dim 
+            # Add jitter for consistency with the rest of the function
+            Sigma = Sigma + 0.1 * np.eye(total_dim)
+
+            return Sigma.astype(np.float32)
+        
+        
+        
+
+        # Low-rank structure creates a base correlation matrix
         W = rng.normal(size=(total_dim, latent_rank))
         Sigma_base = W @ W.T
 
         # Normalize to correlation-like scale
         d = np.sqrt(np.diag(Sigma_base) + 1e-8)
         Sigma_base = Sigma_base / np.outer(d, d)
+        
+        # np.outer creates a matrix where entry (i,j) is d[i] * d[j]
 
-        # Separate blocks
+        # Start with identity so every variable has variance 1
         Sigma = np.eye(total_dim)
 
         obs = slice(0, c_obs_dim)
         hid = slice(c_obs_dim, total_dim)
+        
 
-        # Within-block correlations
-        Sigma[obs, obs] = Sigma_base[obs, obs]
-        Sigma[hid, hid] = Sigma_base[hid, hid]
+            
 
-        # Cross-block correlations controlled by rho_cr
+        # --------------------------------------------------
+        # Observed concept block: concept-concept covariance
+        # --------------------------------------------------
+        Sigma_obs = Sigma_base[obs, obs].copy()
+
+        # Keep diagonal equal to 1, scale only off-diagonal entries
+        Sigma_obs_offdiag = Sigma_obs.copy()
+        np.fill_diagonal(Sigma_obs_offdiag, 0.0)
+
+        Sigma[obs, obs] = np.eye(c_obs_dim) + rho_cc * Sigma_obs_offdiag
+
+
+        # --------------------------------------------------
+        # Hidden residual block: residual-residual covariance
+        # --------------------------------------------------
+        Sigma_hid = Sigma_base[hid, hid].copy()
+
+        # Keep diagonal equal to 1, scale only off-diagonal entries
+        Sigma_hid_offdiag = Sigma_hid.copy()
+        np.fill_diagonal(Sigma_hid_offdiag, 0.0)
+
+        Sigma[hid, hid] = np.eye(c_hid_dim) + rho_rr * Sigma_hid_offdiag
+
+        # --------------------------------------------------
+        # Cross block: concept-residual covariance
+        # --------------------------------------------------
         Sigma[obs, hid] = rho_cr * Sigma_base[obs, hid]
         Sigma[hid, obs] = rho_cr * Sigma_base[hid, obs]
+
+        # Symmetrize to remove tiny numerical asymmetries, it should be symmetrical
+        # However because of floating point operations, it might not be perfectly symmetrical
+        Sigma = 0.5 * (Sigma + Sigma.T)
 
         # Add diagonal jitter for numerical stability
         Sigma = Sigma + 0.1 * np.eye(total_dim)
@@ -396,11 +365,12 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         beta=config.data.beta,
         gamma=config.data.gamma,
         rho_cr=config.data.rho_cr,
+        rho_cc=config.data.rho_cc,
+        rho_rr=config.data.rho_rr,
         sigma_x=config.data.sigma_x,
-        task_sparsity_concepts=config.data.task_sparsity_concepts,
-        task_sparsity_residuals=config.data.task_sparsity_residuals,
+        task_sparsity_obs=config.data.task_sparsity_obs,
+        task_sparsity_hid=config.data.task_sparsity_hid,
         seed=seed,
-        ratio_pairs=config.data.ratio_pairs 
     )
     
     valid_dataset = SyntheticResidualSCBMDataset(
@@ -414,11 +384,12 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         beta=config.data.beta,
         gamma=config.data.gamma,
         rho_cr=config.data.rho_cr,
+        rho_cc=config.data.rho_cc,
+        rho_rr=config.data.rho_rr,
         sigma_x=config.data.sigma_x,
-        task_sparsity_concepts=config.data.task_sparsity_concepts,
-        task_sparsity_residuals=config.data.task_sparsity_residuals,
+        task_sparsity_obs=config.data.task_sparsity_obs,
+        task_sparsity_hid=config.data.task_sparsity_hid,
         seed=seed,  
-        ratio_pairs=config.data.ratio_pairs
     )
     
     test_dataset = SyntheticResidualSCBMDataset(
@@ -432,131 +403,188 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         beta=config.data.beta,
         gamma=config.data.gamma,
         rho_cr=config.data.rho_cr,
+        rho_cc=config.data.rho_cc,
+        rho_rr=config.data.rho_rr,
         sigma_x=config.data.sigma_x,
-        task_sparsity_concepts=config.data.task_sparsity_concepts,
-        task_sparsity_residuals=config.data.task_sparsity_residuals,
+        task_sparsity_obs=config.data.task_sparsity_obs,
+        task_sparsity_hid=config.data.task_sparsity_hid,
         seed=seed, 
-        ratio_pairs=config.data.ratio_pairs 
     )
     
     if log_file is not None:
         with open(log_file, "a") as f:
-            f.write(f"Concepts linked to residuals (concept index, residual index): {train_dataset.concepts_linked_to_residuals}\n")
-            f.write(f"Task weight s for concepts: {train_dataset.w_obs.tolist()}\n")
-            f.write(f"Task weight s for residuals: {train_dataset.w_hid.tolist()}\n")
             f.write(f"rho_cr (correlation between linked concepts and residuals): {train_dataset.rho_cr}\n")
-            f.write(f"alpha: {train_dataset.alpha}, beta: {train_dataset.beta}, gamma: {train_dataset.gamma}\n")
-            
-    
-    # Save the generated dataset for reproducibility and analysis
-    #data_dir_name = save_synthetic_data(config, train_dataset, valid_dataset, test_dataset, log_file=log_file)
-    
-    
-    
-    #return train_dataset, valid_dataset, test_dataset, data_dir_name
+            f.write(f"rho_cc (within-block correlation for observed concepts): {train_dataset.rho_cc}\n")
+            f.write(f"rho_rr (within-block correlation for hidden concepts): {train_dataset.rho_rr}\n")
+            f.write(f"alpha: {train_dataset.alpha}, beta: {train_dataset.beta}\n")
+            f.write(f"Task sparsity for concepts: {train_dataset.task_sparsity_concepts}, Task sparsity for residuals: {train_dataset.task_sparsity_residuals}\n")
+            f.write(f"Sigma_x (noise level in x): {train_dataset.sigma_x}\n")
+            f.write(f"num_concepts: {train_dataset.concepts.shape[1]}, num_residuals: {train_dataset.residuals.shape[1]}\n")
+        
+
     return train_dataset, valid_dataset, test_dataset
         
-"""
-def save_synthetic_data(config, train, val, test):
-    synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
-    os.makedirs(synthetic_data_dir, exist_ok=True)
-    num = 0
-    for dir_name in os.listdir(synthetic_data_dir):
-        if dir_name.startswith(f"synthetic_data_seed_{config.seed}"):
-            num = max(num, int(dir_name.split("_")[-1].split(".")[0]) + 1)
-    
-    # Save directory to save train val test data
-    data_dir_name = f"synthetic_data_seed_{config.seed}_{num}"
-    os.makedirs(os.path.join(synthetic_data_dir, data_dir_name), exist_ok=True)
-    
-    
-    torch.save(train, os.path.join(synthetic_data_dir, data_dir_name, "train.pt"))
-    torch.save(val, os.path.join(synthetic_data_dir, data_dir_name, "val.pt"))
-    torch.save(test, os.path.join(synthetic_data_dir, data_dir_name, "test.pt"))
-    
-    
-    # Create info file with dataset parameters
-    info_file_path = os.path.join(synthetic_data_dir, data_dir_name, "info.txt")
-    with open(info_file_path, "w") as f:
-        f.write(f"num_samples: {config.data.n_samples}\n")
-        f.write(f"num_covariates: {config.data.num_covariates}\n")
-        f.write(f"obs_dim: {config.data.obs_dim}\n")
-        f.write(f"hid_dim: {config.data.hid_dim}\n")
-        f.write(f"latent_rank: {config.data.latent_rank}\n")
-        f.write(f"alpha: {config.data.alpha}\n")
-        f.write(f"beta: {config.data.beta}\n")
-        f.write(f"gamma: {config.data.gamma}\n")
-        f.write(f"rho_cr: {config.data.rho_cr}\n")
-        f.write(f"sigma_x: {config.data.sigma_x}\n")
-        f.write(f"task_sparsity_concepts: {config.data.task_sparsity_concepts}\n")
-        f.write(f"task_sparsity_residuals: {config.data.task_sparsity_residuals}\n")
-        f.write(f"seed: {config.seed}\n")
-        f.write(f"concepts_linked_to_residuals: {train.concepts_linked_to_residuals}\n")
-        
-        
-
-    return data_dir_name
-
-
-def create_synthetic_datasets_res_scbm(config, seed=0):
-    print("Creating new synthetic dataset")
-    train_dataset, valid_dataset, test_dataset = get_synthetic_datasets_res_scbm(config, seed=seed)
-    data_dir_name = save_synthetic_data(config, train_dataset, valid_dataset, test_dataset)
-    config.data.data_dir_name = data_dir_name
-
-
-def update_config_data_properties_from_dataset(config, train, val, test, data_dir_name):
-    config.data.obs_dim = train.obs_dim
-    config.data.hid_dim = train.hid_dim
-    config.data.num_covariates = train.num_covariates
-    config.data.n_samples = train.n_samples + val.n_samples + test.n_samples
-    config.data.train_ratio = train.n_samples / config.data.n_samples
-    config.data.val_ratio = val.n_samples / config.data.n_samples
-    config.data.alpha = train.alpha
-    config.data.beta = train.beta
-    config.data.gamma = train.gamma
-    config.data.rho_cr = train.rho_cr
-    config.data.sigma_x = train.sigma_x
-    config.data.task_sparsity_concepts = train.task_sparsity_concepts
-    config.data.task_sparsity_residuals = train.task_sparsity_residuals
-    config.data.latent_rank = train.latent_rank
-    config.data.data_dir_name = data_dir_name
 
 
 
+class LoadedSyntheticResidualSCBMDataset(Dataset):
+    def __init__(self, x, concepts, residuals, y, s):
+        self.x = x
+        self.concepts = concepts
+        self.residuals = residuals
+        self.y = y
+        self.s = s
+        self.n_samples = x.shape[0]
+
+    def __len__(self):
+        return self.x.shape[0]
+
+    def __getitem__(self, idx):
+        return {
+            "features": self.x[idx],
+            "concepts": self.concepts[idx],
+            "labels": self.y[idx],
+            "residuals": self.residuals[idx],
+            "score": self.s[idx],
+        }
 
 
+def _load_split_dataset(split_dir):
+    x = torch.load(os.path.join(split_dir, "x.pt"))
+    concepts = torch.load(os.path.join(split_dir, "concepts.pt"))
+    residuals = torch.load(os.path.join(split_dir, "residuals.pt"))
+    y = torch.load(os.path.join(split_dir, "y.pt"))
+    s = torch.load(os.path.join(split_dir, "s.pt"))
+    return LoadedSyntheticResidualSCBMDataset(x, concepts, residuals, y, s)
 
 
 def load_saved_synthetic_data(config):
-
-    synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.data_dir_name)
-    
-    if config.data.data_dir_name is not None and not os.path.exists(synthetic_data_dir):
-        raise FileNotFoundError(f"Data directory {synthetic_data_dir} does not exist.")
-    
-
-    print(f"Loading existing dataset from {synthetic_data_dir}...")
-    train = torch.load(os.path.join(synthetic_data_dir, "train.pt"))
-    val = torch.load(os.path.join(synthetic_data_dir, "val.pt"))
-    test = torch.load(os.path.join(synthetic_data_dir, "test.pt"))
-    
-
+    data_dir_root = os.path.join(config.data.data_path, "synthetic_res_scbm")
+    full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
+    train = _load_split_dataset(os.path.join(full_data_dir_path, "train"))
+    val = _load_split_dataset(os.path.join(full_data_dir_path, "val"))
+    test = _load_split_dataset(os.path.join(full_data_dir_path, "test"))
     return train, val, test
+    return Sigma.astype(np.float32)
+
+    @staticmethod
+    def _random_mlp_features(eta, num_covariates, rng):
+        """
+        Fixed random MLP h(eta) used to generate observed inputs x.
+
+        This makes x a nonlinear function of the true latent factors.
+        """
+
+        n_samples, latent_dim = eta.shape
+        hidden_dim = min(512, max(128, 2 * latent_dim))
+
+        W1 = rng.normal(size=(latent_dim, hidden_dim)) / np.sqrt(latent_dim)
+        b1 = rng.normal(size=(hidden_dim,)) * 0.1
+
+        W2 = rng.normal(size=(hidden_dim, num_covariates)) / np.sqrt(hidden_dim)
+        b2 = rng.normal(size=(num_covariates,)) * 0.1
+
+        h = np.tanh(eta @ W1 + b1)
+        x = h @ W2 + b2
+
+        return x
     
-"""
+    
+    
+    
+    
+    
+    
+    
+def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
+    # This is the original one
 
+    
+    
+    
+    # Train-validation-test split
+    indices_train, indices_valtest = train_test_split(
+        np.arange(0, config.data.n_samples), train_size=config.data.train_ratio, random_state=seed
+    )
+    indices_val, indices_test = train_test_split(
+        indices_valtest,
+        train_size=config.data.val_ratio / (1.0 - config.data.train_ratio),
+        random_state=2 * seed,
+    )
+    
+    print(f"Train samples: {len(indices_train)}, Val samples: {len(indices_val)}, Test samples: {len(indices_test)}")
+    print(f"Train ratio: {len(indices_train)/config.data.n_samples:.2f}, Val ratio: {len(indices_val)/config.data.n_samples:.2f}, Test ratio: {len(indices_test)/config.data.n_samples:.2f}")
+    
+    
+    
+    train_dataset = SyntheticResidualSCBMDataset(
+        n_samples=config.data.n_samples,
+        indices = indices_train,
+        num_covariates=config.data.num_covariates,
+        obs_dim=config.data.obs_dim,
+        hid_dim=config.data.hid_dim,
+        latent_rank=config.data.latent_rank,
+        alpha=config.data.alpha,
+        beta=config.data.beta,
+        rho_cr=config.data.rho_cr,
+        rho_cc=config.data.rho_cc,
+        rho_rr=config.data.rho_rr,
+        sigma_x=config.data.sigma_x,
+        task_sparsity_obs=config.data.task_sparsity_obs,
+        task_sparsity_hid=config.data.task_sparsity_hid,
+        seed=seed,
+    )
+    
+    valid_dataset = SyntheticResidualSCBMDataset(
+        n_samples=config.data.n_samples,
+        indices = indices_val,
+        num_covariates=config.data.num_covariates,
+        obs_dim=config.data.obs_dim,
+        hid_dim=config.data.hid_dim,
+        latent_rank=config.data.latent_rank,    
+        alpha=config.data.alpha,
+        beta=config.data.beta,
+        rho_cr=config.data.rho_cr,
+        rho_cc=config.data.rho_cc,
+        rho_rr=config.data.rho_rr,
+        sigma_x=config.data.sigma_x,
+        task_sparsity_obs=config.data.task_sparsity_obs,
+        task_sparsity_hid=config.data.task_sparsity_hid,
+        seed=seed,  
+    )
+    
+    test_dataset = SyntheticResidualSCBMDataset(
+        n_samples=config.data.n_samples,
+        indices = indices_test,
+        num_covariates=config.data.num_covariates,
+        obs_dim=config.data.obs_dim,
+        hid_dim=config.data.hid_dim,
+        latent_rank=config.data.latent_rank,
+        alpha=config.data.alpha,
+        beta=config.data.beta,
+        rho_cr=config.data.rho_cr,
+        rho_cc=config.data.rho_cc,
+        rho_rr=config.data.rho_rr,
+        sigma_x=config.data.sigma_x,
+        task_sparsity_obs=config.data.task_sparsity_obs,
+        task_sparsity_hid=config.data.task_sparsity_hid,
+        seed=seed, 
+    )
+    
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(f"rho_cr (correlation between linked concepts and residuals): {train_dataset.rho_cr}\n")
+            f.write(f"rho_cc (within-block correlation for observed concepts): {train_dataset.rho_cc}\n")
+            f.write(f"rho_rr (within-block correlation for hidden concepts): {train_dataset.rho_rr}\n")
+            f.write(f"alpha: {train_dataset.alpha}, beta: {train_dataset.beta}\n")
+            f.write(f"Task sparsity for observed concepts: {train_dataset.task_sparsity_obs}, Task sparsity for hidden concepts: {train_dataset.task_sparsity_hid}\n")
+            f.write(f"Sigma_x (noise level in x): {train_dataset.sigma_x}\n")
+            f.write(f"num_concepts: {train_dataset.concepts.shape[1]}, num_residuals: {train_dataset.residuals.shape[1]}\n")
+        
 
-import os
-import torch
-from torch.utils.data import DataLoader, Dataset
+    return train_dataset, valid_dataset, test_dataset
+        
 
-from datasets.synthetic_dataset import get_synthetic_datasets
-from datasets.CUB_dataset import get_CUB_dataloaders
-from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
-from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm
-from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
-from utils.utils import numerical_stability_check
 
 
 class LoadedSyntheticResidualSCBMDataset(Dataset):

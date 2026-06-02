@@ -209,23 +209,6 @@ def get_concept_groups(config):
 
 
 
-# def save_synthetic_data(config, train, val, test, log_file):
-#     synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
-#     os.makedirs(synthetic_data_dir, exist_ok=True)
-#     num = 0
-#     for dir_name in os.listdir(synthetic_data_dir):
-#         if dir_name.startswith(f"synthetic_data_seed_{config.seed}"):
-#             num = max(num, int(dir_name.split("_")[-1].split(".")[0]) + 1)
-    
-#     # Save directory to save train val test data
-#     dir_name = f"synthetic_data_seed_{config.seed}_{num}"
-#     os.makedirs(os.path.join(synthetic_data_dir, dir_name), exist_ok=True)
-    
-    
-#     torch.save(train, os.path.join(synthetic_data_dir, dir_name, "train.pt"))
-#     torch.save(val, os.path.join(synthetic_data_dir, dir_name, "val.pt"))
-#     torch.save(test, os.path.join(synthetic_data_dir, dir_name, "test.pt"))
-
 
 def save_synthetic_data(config, train, val, test, log_file):
     synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
@@ -237,7 +220,7 @@ def save_synthetic_data(config, train, val, test, log_file):
         save_name = "cluster_"
     else:
         save_name = "local_"
-    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_rho_{config.data.rho_cr}_pair_ratio_{config.data.ratio_pairs}_r_sparsity_{config.data.task_sparsity_residuals}_c_sparsity_{config.data.task_sparsity_concepts}_sigmax_{config.data.sigma_x}_seed_{config.seed}"
+    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_rho_cr{config.data.rho_cr}_rho_cc{config.data.rho_cc}_rho_rr{config.data.rho_rr}_r_sparsity_{config.data.task_sparsity_hid}_c_sparsity_{config.data.task_sparsity_obs}_sigmax_{config.data.sigma_x}_seed_{config.seed}"
     
     
     
@@ -262,23 +245,25 @@ def save_synthetic_data(config, train, val, test, log_file):
         torch.save(dataset.residuals, os.path.join(dataset_dir, "residuals.pt"))
         torch.save(dataset.y, os.path.join(dataset_dir, "y.pt"))
         torch.save(dataset.s, os.path.join(dataset_dir, "s.pt"))
-        
+        torch.save(dataset.w_obs, os.path.join(dataset_dir, "w_obs.pt"))
+        torch.save(dataset.w_hid, os.path.join(dataset_dir, "w_hid.pt"))
+
     # Info file
     info_file = os.path.join(save_dir, "info.txt")
     # Parent folder of log file
     log_file_parent = os.path.dirname(log_file)
+    # info file for dataset
     with open(info_file, "w") as f:
-        f.write(f"Concepts linked to residuals (concept index, residual index): {train.concepts_linked_to_residuals}\n")
-        f.write(f"Task weight s for concepts: {train.w_obs.tolist()}\n")
-        f.write(f"Task weight s for residuals: {train.w_hid.tolist()}\n")
         f.write(f"rho_cr (correlation between linked concepts and residuals): {train.rho_cr}\n")
-        f.write(f"alpha: {train.alpha}, beta: {train.beta}, gamma: {train.gamma}\n")
-        f.write(f"Task sparsity for concepts: {train.task_sparsity_concepts}, Task sparsity for residuals: {train.task_sparsity_residuals}\n")
+        f.write(f"rho_cc (within-block correlation for observed concepts): {train.rho_cc}\n")
+        f.write(f"rho_rr (within-block correlation for hidden concepts): {train.rho_rr}\n")
+        f.write(f"alpha: {train.alpha}, beta: {train.beta}\n")
+        f.write(f"Task sparsity for observed concepts: {train.task_sparsity_obs}, Task sparsity for hidden concepts: {train.task_sparsity_hid}\n")
         f.write(f"Sigma_x (noise level in x): {train.sigma_x}\n")
         f.write(f"num_concepts: {train.concepts.shape[1]}, num_residuals: {train.residuals.shape[1]}\n")
         f.write(f"Data created for model saved at: {log_file_parent}\n")
         
-
+    # log file for training
     with open(log_file, "a") as f:
         f.write(f"data_dir: {save_dir}\n")
         

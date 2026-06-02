@@ -13,6 +13,19 @@ from torchvision import models
 from models.networks import FCNNEncoder
 from utils.training import freeze_module, unfreeze_module
 
+# Checks if a tensor has become non-finite and prints out diagnostic info if so, then raises an error
+def check_finite(name, tensor):
+    if not torch.isfinite(tensor).all():
+        finite = tensor[torch.isfinite(tensor)]
+        print(f"\n{name} has NaN/Inf")
+        if finite.numel() > 0:
+            print(f"{name} finite min:", finite.min().item())
+            print(f"{name} finite max:", finite.max().item())
+        print(f"{name} num NaN:", torch.isnan(tensor).sum().item())
+        print(f"{name} num Inf:", torch.isinf(tensor).sum().item())
+        raise ValueError(f"{name} became non-finite")
+
+
 
 def create_model(config):
     """
@@ -511,15 +524,26 @@ class SCBM_residual(nn.Module):
 
         # Get intermediate representations
         intermediate = self.encoder(x)
+        check_finite("intermediate", intermediate)
+
+
+
+
 
         # Get mu and cholesky decomposition of covariance
         c_res_mu = self.mu_concepts_residuals(intermediate)
+        check_finite("c_res_mu", c_res_mu)
+        
+        
         if self.cov_type == "global":
             c_res_sigma = self.sigma_concepts_residuals.repeat(c_res_mu.size(0), 1)
         elif self.cov_type == "empirical":
             c_res_sigma = self.sigma_concepts_residuals.unsqueeze(0).repeat(c_res_mu.size(0), 1, 1)
         else:
             c_res_sigma = self.sigma_concepts_residuals(intermediate)
+
+        check_finite("c_res_sigma", c_res_sigma)
+
 
         if self.cov_type == "empirical":
             c_res_triang_cov = c_res_sigma
@@ -534,10 +558,14 @@ class SCBM_residual(nn.Module):
             )
             diag_idx = rows == cols
             c_res_triang_cov[:, rows, cols] = c_res_sigma
+            
+            check_finite("c_res_triang_cov pre diag", c_res_triang_cov)
+            
             c_res_triang_cov[:, range(self.num_concepts + self.num_residuals), range(self.num_concepts + self.num_residuals)] = (
                 F.softplus(c_res_sigma[:, diag_idx]) + 1e-6
             )
-
+            check_finite("c_res_triang_cov post diag", c_res_triang_cov)
+            
         # Sample from predicted normal distribution
         c_res_dist = MultivariateNormal(c_res_mu, scale_tril=c_res_triang_cov)
         c_res_mcmc_logit = c_res_dist.rsample([self.num_monte_carlo]).movedim(
