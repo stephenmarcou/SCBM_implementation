@@ -153,6 +153,10 @@ class SyntheticResidualSCBMDataset(Dataset):
         self.w_obs = torch.tensor(w_obs, dtype=torch.float32)
         self.w_hid = torch.tensor(w_hid, dtype=torch.float32)
         self.threshold = float(threshold)
+        self.eta_concepts = torch.tensor(eta_concepts, dtype=torch.float32)
+        self.eta_residuals = torch.tensor(eta_residuals, dtype=torch.float32)
+        self.concept_signal = torch.tensor(concept_signal, dtype=torch.float32)
+        self.residual_signal = torch.tensor(residual_signal, dtype=torch.float32)
         
         
         
@@ -162,6 +166,10 @@ class SyntheticResidualSCBMDataset(Dataset):
             self.residuals = self.residuals[indices]
             self.y = self.y[indices]
             self.s = self.s[indices]
+            self.eta_concepts = self.eta_concepts[indices]
+            self.eta_residuals = self.eta_residuals[indices]
+            self.concept_signal = self.concept_signal[indices]
+            self.residual_signal = self.residual_signal[indices]
             self.w_obs = self.w_obs
             self.w_hid = self.w_hid
             self.n_samples = self.x.shape[0]

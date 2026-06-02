@@ -247,6 +247,10 @@ def save_synthetic_data(config, train, val, test, log_file):
         torch.save(dataset.s, os.path.join(dataset_dir, "s.pt"))
         torch.save(dataset.w_obs, os.path.join(dataset_dir, "w_obs.pt"))
         torch.save(dataset.w_hid, os.path.join(dataset_dir, "w_hid.pt"))
+        torch.save(dataset.eta_concepts, os.path.join(dataset_dir, "eta_concepts.pt"))
+        torch.save(dataset.eta_residuals, os.path.join(dataset_dir, "eta_residuals.pt"))
+        torch.save(dataset.concept_signal, os.path.join(dataset_dir, "concept_signal.pt"))
+        torch.save(dataset.residual_signal, os.path.join(dataset_dir, "residual_signal.pt"))
 
     # Info file
     info_file = os.path.join(save_dir, "info.txt")
