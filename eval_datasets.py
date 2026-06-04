@@ -221,9 +221,7 @@ def train(config):
     
     
     log_file = os.path.join(experiment_path, "log.txt")
-    # This is rewritten later in code
-    # with open(log_file, "w") as f:
-    #     f.write(str(config) + "\n\n")  # Log the config at the beginning of the log file
+
 
     
     # ---- Load data and create dataloaders ---
@@ -339,13 +337,18 @@ def open_synthetic_data_log_file_and_write_info(config, log_file, data_dir_name)
             info_content = info_f.read()
             f.write(f"Synthetic dataset info:\n{info_content}\n\n")
         
+        
+
+
     
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(config: DictConfig) -> None:
+
     print("Configuration:")
     print(config)
     train(config)
+    
     
 
     

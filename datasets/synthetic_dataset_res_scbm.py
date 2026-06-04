@@ -51,6 +51,7 @@ class SyntheticResidualSCBMDataset(Dataset):
         task_sparsity_obs,
         task_sparsity_hid,
         seed,
+        dataset_difficulty,
         indices=None
     ):
         super().__init__()
@@ -115,12 +116,16 @@ class SyntheticResidualSCBMDataset(Dataset):
         residual_signal = residuals * residual_strengths
 
         # x is generated from concept presence + strength
-        eta_for_x = np.concatenate([concept_signal, residual_signal], axis=1)
+        if dataset_difficulty == "easy":
+            eta_for_x = np.concatenate([concepts, residuals], axis=1)
+        elif dataset_difficulty == "hard" or dataset_difficulty == "medium":
+            eta_for_x = np.concatenate([concept_signal, residual_signal], axis=1)
 
         x = self._random_mlp_features(
             eta=eta_for_x,
             num_covariates=num_covariates,
             rng=rng,
+            sigma_x=sigma_x,
         )
 
         # Global sparse task weights
@@ -128,8 +133,12 @@ class SyntheticResidualSCBMDataset(Dataset):
         w_hid = self._make_sparse_weights(self.hid_dim, task_sparsity_hid, rng)
 
         # Label depends on expressed concept strength of concepts that are present
-        s_concepts = concept_signal @ w_obs
-        s_residuals = residual_signal @ w_hid
+        if dataset_difficulty == "easy" or dataset_difficulty == "medium":
+            s_concepts = concepts @ w_obs
+            s_residuals = residuals @ w_hid
+        elif dataset_difficulty == "hard":
+            s_concepts = concept_signal @ w_obs
+            s_residuals = residual_signal @ w_hid
 
         s = alpha * s_concepts + beta * s_residuals
 
@@ -313,7 +322,7 @@ class SyntheticResidualSCBMDataset(Dataset):
         return Sigma.astype(np.float32)
 
     @staticmethod
-    def _random_mlp_features(eta, num_covariates, rng):
+    def _random_mlp_features(eta, num_covariates, rng, sigma_x):
         """
         Fixed random MLP h(eta) used to generate observed inputs x.
 
@@ -331,6 +340,7 @@ class SyntheticResidualSCBMDataset(Dataset):
 
         h = np.tanh(eta @ W1 + b1)
         x = h @ W2 + b2
+        x = x + rng.normal(scale=sigma_x, size=x.shape)
 
         return x
     
@@ -339,98 +349,7 @@ class SyntheticResidualSCBMDataset(Dataset):
     
     
     
-    
-    
-def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
-    # This is the original one
 
-    
-    
-    
-    # Train-validation-test split
-    indices_train, indices_valtest = train_test_split(
-        np.arange(0, config.data.n_samples), train_size=config.data.train_ratio, random_state=seed
-    )
-    indices_val, indices_test = train_test_split(
-        indices_valtest,
-        train_size=config.data.val_ratio / (1.0 - config.data.train_ratio),
-        random_state=2 * seed,
-    )
-    
-    print(f"Train samples: {len(indices_train)}, Val samples: {len(indices_val)}, Test samples: {len(indices_test)}")
-    print(f"Train ratio: {len(indices_train)/config.data.n_samples:.2f}, Val ratio: {len(indices_val)/config.data.n_samples:.2f}, Test ratio: {len(indices_test)/config.data.n_samples:.2f}")
-    
-    
-    
-    train_dataset = SyntheticResidualSCBMDataset(
-        n_samples=config.data.n_samples,
-        indices = indices_train,
-        num_covariates=config.data.num_covariates,
-        obs_dim=config.data.obs_dim,
-        hid_dim=config.data.hid_dim,
-        latent_rank=config.data.latent_rank,
-        alpha=config.data.alpha,
-        beta=config.data.beta,
-        gamma=config.data.gamma,
-        rho_cr=config.data.rho_cr,
-        rho_cc=config.data.rho_cc,
-        rho_rr=config.data.rho_rr,
-        sigma_x=config.data.sigma_x,
-        task_sparsity_obs=config.data.task_sparsity_obs,
-        task_sparsity_hid=config.data.task_sparsity_hid,
-        seed=seed,
-    )
-    
-    valid_dataset = SyntheticResidualSCBMDataset(
-        n_samples=config.data.n_samples,
-        indices = indices_val,
-        num_covariates=config.data.num_covariates,
-        obs_dim=config.data.obs_dim,
-        hid_dim=config.data.hid_dim,
-        latent_rank=config.data.latent_rank,    
-        alpha=config.data.alpha,
-        beta=config.data.beta,
-        gamma=config.data.gamma,
-        rho_cr=config.data.rho_cr,
-        rho_cc=config.data.rho_cc,
-        rho_rr=config.data.rho_rr,
-        sigma_x=config.data.sigma_x,
-        task_sparsity_obs=config.data.task_sparsity_obs,
-        task_sparsity_hid=config.data.task_sparsity_hid,
-        seed=seed,  
-    )
-    
-    test_dataset = SyntheticResidualSCBMDataset(
-        n_samples=config.data.n_samples,
-        indices = indices_test,
-        num_covariates=config.data.num_covariates,
-        obs_dim=config.data.obs_dim,
-        hid_dim=config.data.hid_dim,
-        latent_rank=config.data.latent_rank,
-        alpha=config.data.alpha,
-        beta=config.data.beta,
-        gamma=config.data.gamma,
-        rho_cr=config.data.rho_cr,
-        rho_cc=config.data.rho_cc,
-        rho_rr=config.data.rho_rr,
-        sigma_x=config.data.sigma_x,
-        task_sparsity_obs=config.data.task_sparsity_obs,
-        task_sparsity_hid=config.data.task_sparsity_hid,
-        seed=seed, 
-    )
-    
-    if log_file is not None:
-        with open(log_file, "a") as f:
-            f.write(f"rho_cr (correlation between linked concepts and residuals): {train_dataset.rho_cr}\n")
-            f.write(f"rho_cc (within-block correlation for observed concepts): {train_dataset.rho_cc}\n")
-            f.write(f"rho_rr (within-block correlation for hidden concepts): {train_dataset.rho_rr}\n")
-            f.write(f"alpha: {train_dataset.alpha}, beta: {train_dataset.beta}\n")
-            f.write(f"Task sparsity for concepts: {train_dataset.task_sparsity_concepts}, Task sparsity for residuals: {train_dataset.task_sparsity_residuals}\n")
-            f.write(f"Sigma_x (noise level in x): {train_dataset.sigma_x}\n")
-            f.write(f"num_concepts: {train_dataset.concepts.shape[1]}, num_residuals: {train_dataset.residuals.shape[1]}\n")
-        
-
-    return train_dataset, valid_dataset, test_dataset
         
 
 
@@ -473,30 +392,8 @@ def load_saved_synthetic_data(config):
     val = _load_split_dataset(os.path.join(full_data_dir_path, "val"))
     test = _load_split_dataset(os.path.join(full_data_dir_path, "test"))
     return train, val, test
-    return Sigma.astype(np.float32)
 
-    @staticmethod
-    def _random_mlp_features(eta, num_covariates, rng):
-        """
-        Fixed random MLP h(eta) used to generate observed inputs x.
 
-        This makes x a nonlinear function of the true latent factors.
-        """
-
-        n_samples, latent_dim = eta.shape
-        hidden_dim = min(512, max(128, 2 * latent_dim))
-
-        W1 = rng.normal(size=(latent_dim, hidden_dim)) / np.sqrt(latent_dim)
-        b1 = rng.normal(size=(hidden_dim,)) * 0.1
-
-        W2 = rng.normal(size=(hidden_dim, num_covariates)) / np.sqrt(hidden_dim)
-        b2 = rng.normal(size=(num_covariates,)) * 0.1
-
-        h = np.tanh(eta @ W1 + b1)
-        x = h @ W2 + b2
-
-        return x
-    
     
     
     
@@ -505,11 +402,6 @@ def load_saved_synthetic_data(config):
     
     
 def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
-    # This is the original one
-
-    
-    
-    
     # Train-validation-test split
     indices_train, indices_valtest = train_test_split(
         np.arange(0, config.data.n_samples), train_size=config.data.train_ratio, random_state=seed
@@ -540,6 +432,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         sigma_x=config.data.sigma_x,
         task_sparsity_obs=config.data.task_sparsity_obs,
         task_sparsity_hid=config.data.task_sparsity_hid,
+        dataset_difficulty=config.data.experiment_type,
         seed=seed,
     )
     
@@ -558,6 +451,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         sigma_x=config.data.sigma_x,
         task_sparsity_obs=config.data.task_sparsity_obs,
         task_sparsity_hid=config.data.task_sparsity_hid,
+        dataset_difficulty=config.data.experiment_type,
         seed=seed,  
     )
     
@@ -576,6 +470,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         sigma_x=config.data.sigma_x,
         task_sparsity_obs=config.data.task_sparsity_obs,
         task_sparsity_hid=config.data.task_sparsity_hid,
+        dataset_difficulty=config.data.experiment_type,
         seed=seed, 
     )
     
@@ -617,7 +512,7 @@ class LoadedSyntheticResidualSCBMDataset(Dataset):
         }
 
 
-def _load_split_dataset(split_dir):
+def load_split_dataset(split_dir):
     x = torch.load(os.path.join(split_dir, "x.pt"))
     concepts = torch.load(os.path.join(split_dir, "concepts.pt"))
     residuals = torch.load(os.path.join(split_dir, "residuals.pt"))
@@ -629,7 +524,7 @@ def _load_split_dataset(split_dir):
 def load_saved_synthetic_data(config):
     data_dir_root = os.path.join(config.data.data_path, "synthetic_res_scbm")
     full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
-    train = _load_split_dataset(os.path.join(full_data_dir_path, "train"))
-    val = _load_split_dataset(os.path.join(full_data_dir_path, "val"))
-    test = _load_split_dataset(os.path.join(full_data_dir_path, "test"))
+    train = load_split_dataset(os.path.join(full_data_dir_path, "train"))
+    val = load_split_dataset(os.path.join(full_data_dir_path, "val"))
+    test = load_split_dataset(os.path.join(full_data_dir_path, "test"))
     return train, val, test

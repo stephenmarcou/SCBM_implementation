@@ -211,7 +211,7 @@ def get_concept_groups(config):
 
 
 def save_synthetic_data(config, train, val, test, log_file):
-    synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
+    synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.experiment_type)
     os.makedirs(synthetic_data_dir, exist_ok=True)
 
     # Save dir name

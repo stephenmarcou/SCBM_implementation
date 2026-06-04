@@ -145,9 +145,14 @@ def train(config):
     if config.hyperparameter_search:
         config.experiment_dir = join(config.experiment_dir, "hyperparameter_search")
     
-    experiment_path = (
-        Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
-    )
+    if config.data.dataset != "synthetic_res_scbm":
+        experiment_path = (
+            Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
+        )
+    else:
+        experiment_path = (
+            Path(config.experiment_dir) / config.model.model / config.data.dataset / config.data.experiment_type / ex_name
+        )
     
  
     
@@ -472,15 +477,7 @@ def check_CUB_data(config):
         # In case we are using incomplete dataset, we need to update the number of concepts in the config based on the dataset we are loading
         config.data.num_concepts = len(train_data[0]["attribute_label"])
         
-def check_synthetic_res_scbm_data(config):
-    if config.data.data_dir_name is not None:
-        full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.data_dir_name)
-        if not os.path.exists(full_path):   
-            raise FileNotFoundError(f"Synthetic dataset directory {full_path} does not exist.")
-        train, val, test = load_saved_synthetic_data(config)
-        update_config_data_properties_from_dataset(config, train, val, test, config.data.data_dir_name)
-    else:
-        create_synthetic_datasets_res_scbm(config, seed=config.seed)
+
     
         
     
