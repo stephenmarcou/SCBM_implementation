@@ -251,7 +251,8 @@ def save_synthetic_data(config, train, val, test, log_file):
         torch.save(dataset.eta_residuals, os.path.join(dataset_dir, "eta_residuals.pt"))
         torch.save(dataset.concept_signal, os.path.join(dataset_dir, "concept_signal.pt"))
         torch.save(dataset.residual_signal, os.path.join(dataset_dir, "residual_signal.pt"))
-
+        torch.save(dataset.Sigma, os.path.join(dataset_dir, "Sigma.pt"))
+        
     # Info file
     info_file = os.path.join(save_dir, "info.txt")
     # Parent folder of log file
