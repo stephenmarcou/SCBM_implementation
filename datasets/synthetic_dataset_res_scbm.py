@@ -523,7 +523,8 @@ def load_split_dataset(split_dir):
 
 def load_saved_synthetic_data(config):
     data_dir_root = os.path.join(config.data.data_path, "synthetic_res_scbm")
-    full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
+    #full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
+    full_data_dir_path = os.path.join(data_dir_root, config.data.experiment_type, config.data.data_dir_name)
     train = load_split_dataset(os.path.join(full_data_dir_path, "train"))
     val = load_split_dataset(os.path.join(full_data_dir_path, "val"))
     test = load_split_dataset(os.path.join(full_data_dir_path, "test"))
