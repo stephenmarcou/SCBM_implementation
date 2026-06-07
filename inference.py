@@ -4,6 +4,7 @@
 
 import ast
 import os
+from os.path import join
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -12,7 +13,7 @@ from pathlib import Path
 import wandb
 
 from models.losses import create_loss
-from utils.data import get_concept_groups, get_data
+from utils.data import get_concept_groups, get_data, make_analysis_loader
 from utils.intervention import intervene_cbm, intervene_scbm, intervene_scbm_residual, intervene_scbm_residual_optimized
 from utils.training import Custom_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm, validate_one_epoch_scbm_residual
 from utils.utils import reset_random_seeds
@@ -38,9 +39,8 @@ def run(config):
     else:
         print("No GPU available")
         
-    experiment_path = (
-        Path(config.experiment_dir) / config.model.model / config.data.dataset / config.inference.ex_name
-    )
+    
+    experiment_path = get_experiment_path(config)   
     
     if not experiment_path.exists():
         raise ValueError(f"Experiment path {experiment_path} does not exist.")
@@ -105,6 +105,8 @@ def run(config):
     log_file=log_file_inference if config.run_inference else log_file
     )
     
+
+    
     # Get concept names for plotting
     concept_names_graph = get_concept_groups(config.data)
    
@@ -148,8 +150,59 @@ def run(config):
             test=True,
             concept_names_graph=concept_names_graph,
             log_file=log_file_inference, 
-            #save_concept_target_pred=save_concept_target_pred
+            save_residual_meta_data_folder="test",
         )
+        
+        # ---------------------------------------------------------
+        # Save residual meta data for analysis of concept discovery
+        # ---------------------------------------------------------
+        if config.model.model == "scbm_residual" and config.data.save_residual_channel:
+            train_analysis_loader = make_analysis_loader(
+                train_loader,
+                batch_size=config.model.val_batch_size,
+                num_workers=config.workers,
+            )
+            val_analysis_loader = make_analysis_loader(
+                val_loader,
+                batch_size=config.model.val_batch_size,
+                num_workers=config.workers,
+            )
+
+            
+            
+            validate_one_epoch(
+                val_analysis_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file_inference,
+                save_residual_meta_data_folder="val",
+                metrics_only_for_saving=True,
+            )
+
+            validate_one_epoch(
+                train_analysis_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file_inference,
+                save_residual_meta_data_folder="train",
+                metrics_only_for_saving=True,
+            )
+                
+        
+        
+        
         
 
     # ---------------------------------
@@ -174,11 +227,71 @@ def run(config):
     wandb.finish(quiet=True)
     return None
 
+
+
+     
+def get_data_dir_name_synthetic_data(experiment_path):
+
+    """
+    Get the data directory name from the log.txt file in the experiment path. 
+    This is so we can load the correct synthetic dataset for inference and interventions
+    """
+    data_dir_in_line = False
+    loaded_data_dir_in_line = False
+    
+    with open(os.path.join(experiment_path, "log.txt"), "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("data_dir:"):
+                data_dir_line = line
+                data_dir_in_line = True
+                break
+            # If model was trained on an existing synthetic dataset
+            elif line.startswith("Loading existing synthetic dataset from"):
+                data_dir_line = line
+                loaded_data_dir_in_line = True
+                break
+        if data_dir_in_line:
+            data_dir = data_dir_line.split("data_dir:")[1].strip()
+        elif loaded_data_dir_in_line:
+            data_dir = data_dir_line.split("Loading existing synthetic dataset from")[1].strip()
+        else: 
+            raise ValueError("data_dir not found in log.txt")
+        
+        
+        data_dir = "/".join(data_dir.split("/")[-1:])       
+    return data_dir
+
+
+
+def get_experiment_path(config):
+    if config.data.dataset != "synthetic_res_scbm":
+        experiment_path = (
+            Path(config.experiment_dir) / config.model.model / config.data.dataset / config.inference.ex_name
+        )
+    
+    else:
+        if config.data.experiment_type is None:
+            experiment_path = (
+                Path(config.experiment_dir) / config.model.model / config.data.dataset / config.inference.ex_name
+            )
+        else:
+            experiment_path = (
+                Path(config.experiment_dir) / config.model.model / config.data.dataset / config.data.experiment_type / config.inference.ex_name
+            )
+    return experiment_path
+
+
+
+
 # Need to change this function
 def update_pkl_dir_and_num_concepts(config):
-    experiment_path = (
-        Path(config.experiment_dir) / config.model.model / config.data.dataset / config.inference.ex_name
-    )
+    
+    experiment_path = get_experiment_path(config)
+
+
+    
+    
     with open(os.path.join(experiment_path, "log.txt"), "r") as f:
         lines = f.readlines()
         info_line = lines[0]
@@ -190,21 +303,11 @@ def update_pkl_dir_and_num_concepts(config):
             config.data.pkl_file_dir = pkl_file_dir
             
             
-            
-        def get_data_dir_name_synthetic_data(experiment_path):
-            with open(os.path.join(experiment_path, "log.txt"), "r") as f:
-                lines = f.readlines()
-                for line in lines:
-                    if line.startswith("data_dir"):
-                        data_dir_name = line.split(":")[1].strip()
-                        data_dir_name = data_dir_name.split("/")[-1]  # Get the last part of the path
-                        return data_dir_name
-            raise ValueError("data_dir not found in log.txt")
-            
         if config.data.dataset == "synthetic_res_scbm":
             data_dir_name = get_data_dir_name_synthetic_data(experiment_path)
             config.data.data_dir_name = data_dir_name
-            
+        
+        # Update num concepts and num residuals to create right model 
         print(f"info_line_dict: {info_line_dict}")
         config.data.num_concepts = info_line_dict["data"]["num_concepts"]
         if config.model.model == "scbm_residual":

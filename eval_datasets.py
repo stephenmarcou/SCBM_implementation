@@ -209,10 +209,16 @@ def train(config):
         else:
             ex_name = f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
     
-    experiment_path = (
-        Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
-    )
-    
+    if config.data.dataset == "synthetic_res_scbm":
+        experiment_path = (
+            Path(config.experiment_dir) / config.model.model / config.data.dataset / config.data.experiment_type /ex_name
+        )
+        
+    else:
+        experiment_path = (
+            Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
+        )
+        
     
     
     experiment_path.mkdir(parents=True)

@@ -411,7 +411,8 @@ def validate_one_epoch_scbm_residual(
     test=False,
     concept_names_graph=None,
     log_file=None,
-    #save_concept_target_pred=False
+    save_residual_meta_data_folder=None,
+    metrics_only_for_saving=False,
 ):
     """
     Validate the Stochastic Concept Bottleneck Model (SCBM) for one epoch.
@@ -446,15 +447,14 @@ def validate_one_epoch_scbm_residual(
     
     model.eval()
 
-    # classwise_covariances = {}
-    # classwise_counts = {}
-    # classwise_mu = {}
-    # concept_residuals_probabilities_batches = []
+
     
     residual_probs_mean = []
     residual_prob_std = []
     residual_mean = []
     residual_std = []
+    
+    res_mu_list = []
     
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
@@ -473,9 +473,7 @@ def validate_one_epoch_scbm_residual(
                 "labels"
             ].to(device)
             concepts_true = batch["concepts"].to(device)
-            # concepts_residuals_mcmc_probs, triang_cov, target_pred_logits = model(
-            #     batch_features, epoch, validation=True, c_true=concepts_true
-            # )
+
             
             # Forward pass
             (
@@ -490,7 +488,7 @@ def validate_one_epoch_scbm_residual(
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
             
             # Save the residual channel 
-            if config.data.save_residual_channel and test:
+            if config.data.save_residual_channel and save_residual_meta_data_folder:
                 residuals_mcmc_probs = concepts_residuals_mcmc_probs[
                     :, config.data.num_concepts:, :
                 ].detach()
@@ -498,6 +496,10 @@ def validate_one_epoch_scbm_residual(
                 residuals_mcmc = concepts_residuals_mcmc[
                     :, config.data.num_concepts:, :
                 ].detach()
+                
+                res_mu = c_res_mu[:, config.data.num_concepts:].detach()
+                
+                res_mu_list.append(res_mu.cpu())
 
                 residuals_pred_probs = residuals_mcmc_probs.mean(dim=-1)
                 # unbiased=False ensures that we do not get nan if only one monte carlo sample used 
@@ -511,47 +513,8 @@ def validate_one_epoch_scbm_residual(
 
                 residual_mean.append(residuals_sample_mean.cpu())
                 residual_std.append(residuals_sample_std.cpu())
-
-            
-            
-            # This can be deleted
-            # ------------------------------------------------------------------
-            # if config.data.dataset == "synthetic_res_scbm" and config.data.save_predicted_concepts_residuals and test:
-            #     #residuals_probs = concepts_residuals_mcmc_probs[:, config.data.num_concepts:, :].detach().cpu()
-            #     concept_residuals_probabilities_batches.append(concepts_residuals_mcmc_probs)
-
-            # # Compute covariance matrix of concepts and residuals
-            # cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
-            # #print(f"Covariance matrix shape: {cov.shape}")
-
-            # batch_class_ids = target_true.detach().cpu().tolist()
-            # for sample_idx, class_id in enumerate(batch_class_ids):
-            #     if class_id not in classwise_covariances:
-            #         classwise_covariances[class_id] = cov[sample_idx].detach().cpu().clone()
-            #         classwise_mu[class_id] = c_res_mu[sample_idx].detach().cpu().clone()
-            #         classwise_counts[class_id] = 1
-            #     else:
-            #         classwise_covariances[class_id] += cov[sample_idx].detach().cpu()
-            #         classwise_mu[class_id] += c_res_mu[sample_idx].detach().cpu()
-            #         classwise_counts[class_id] += 1
-            # ------------------------------------------------------------------
-
-
-            # if test and k % (len(loader) // 10) == 0:
-            #     try:
-            #         corr = (cov[0] / cov[0].diag().sqrt()).transpose(
-            #             dim0=0, dim1=1
-            #         ) / cov[0].diag().sqrt()
-            #         matrix = corr.cpu().numpy()
-
-            #         compute_and_plot_heatmap(
-            #             matrix, concepts_true, concept_names_graph, config
-            #         )
-
-            #     except:
-            #         pass
-            
-            
+                
+                
             
             target_loss, concepts_loss, prec_loss, total_loss = loss_fn(
                 concepts_mcmc_probs,
@@ -592,9 +555,6 @@ def validate_one_epoch_scbm_residual(
 
                 
 
-
-
-
             # Store predictions
             concepts_pred_probs = concepts_mcmc_probs.mean(-1)
             metrics.update(
@@ -613,87 +573,54 @@ def validate_one_epoch_scbm_residual(
     # Calculate and log metrics
     metrics_dict = metrics.compute(validation=True, config=config)
 
-    if not test:
-        wandb.log({f"validation/{k}": v for k, v in metrics_dict.items()})
-        prints = f"Epoch {epoch}, Validation: "
-    else:
-        wandb.log({f"test/{k}": v for k, v in metrics_dict.items()})
-        prints = f"Test: "
-    for key, value in metrics_dict.items():
-        prints += f"{key}: {value:.3f} "
-    
-    if log_file is not None:
-        with open(log_file, "a") as f:
-            f.write(prints + "\n")
+    if not metrics_only_for_saving:
+        if not test:
+            wandb.log({f"validation/{k}": v for k, v in metrics_dict.items()})
+            prints = f"Epoch {epoch}, Validation: "
+        else:
+            wandb.log({f"test/{k}": v for k, v in metrics_dict.items()})
+            prints = f"Test: "
+        for key, value in metrics_dict.items():
+            prints += f"{key}: {value:.3f} "
+        
+        if log_file is not None:
+            with open(log_file, "a") as f:
+                f.write(prints + "\n")
+                
+        print(prints)
+        print()
 
-    if config.data.save_residual_channel and test:
+    if config.data.save_residual_channel and save_residual_meta_data_folder:
         residuals_mean_tensor = torch.cat(residual_mean, dim=0)
         residuals_std_tensor = torch.cat(residual_std, dim=0)
         residual_probs_mean_tensor = torch.cat(residual_probs_mean, dim=0)
         residual_probs_std_tensor = torch.cat(residual_prob_std, dim=0)
+        res_mu_tensor = torch.cat(res_mu_list, dim=0)
 
-        full_path = os.path.dirname(log_file)
+        parent_dir_path = os.path.dirname(log_file)
+        full_path = os.path.join(parent_dir_path, save_residual_meta_data_folder)
+        Path(full_path).mkdir(parents=True, exist_ok=True)
+        
         save_path_residual_mean = os.path.join(full_path, "residuals_sample_mean.pt")
         save_path_residual_std = os.path.join(full_path, "residuals_sample_std.pt")
         save_path_residual_probs_mean = os.path.join(full_path, "residuals_pred_probs_mean.pt")
         save_path_residual_probs_std = os.path.join(full_path, "residuals_pred_probs_std.pt")
+        save_path_res_mu = os.path.join(full_path, "res_mu.pt")
 
         torch.save(residuals_mean_tensor, save_path_residual_mean)
         torch.save(residuals_std_tensor, save_path_residual_std)
         torch.save(residual_probs_mean_tensor, save_path_residual_probs_mean)
         torch.save(residual_probs_std_tensor, save_path_residual_probs_std)
+        torch.save(res_mu_tensor, save_path_res_mu)
 
         print(f"Saved residual means to {save_path_residual_mean}")
         print(f"Saved residual stds to {save_path_residual_std}")
         print(f"Saved residual predicted probabilities means to {save_path_residual_probs_mean}")
         print(f"Saved residual predicted probabilities stds to {save_path_residual_probs_std}")
+        print(f"Saved residual mu to {save_path_res_mu}")
 
 
 
-
-
-
-    # Saving checks already done earlier as concept_residuals_probabilities_batches would be empty if
-    # not saving concepts or not synthetic dataset
-    # This can be deleted
-    # --------------------------------------------------------------------------
-    # if concept_residuals_probabilities_batches and log_file is not None:
-    #     log_file_parent = os.path.dirname(log_file)
-    #     concept_residuals_save_path = os.path.join(log_file_parent, "pred_concepts_residuals_probs.pt")
-    #     residuals_probs = torch.cat(concept_residuals_probabilities_batches, dim=0)
-    #     torch.save(residuals_probs, concept_residuals_save_path)
-    #     print(f"Saved predicted concept residual probabilities to {concept_residuals_save_path}")
-
-    # if test:
-    #     averaged_classwise_covariances = {
-    #         class_id: classwise_covariances[class_id] / classwise_counts[class_id]
-    #         for class_id in classwise_covariances
-    #         if classwise_counts.get(class_id, 0) > 0
-    #     }
-        
-    #     averaged_classwise_mu = {
-    #         class_id: classwise_mu[class_id] / classwise_counts[class_id]   
-    #         for class_id in classwise_mu
-    #         if classwise_counts.get(class_id, 0) > 0
-    #     }
-        
-        
-        
-    #     if averaged_classwise_covariances and log_file is not None:
-    #         full_path = os.path.dirname(log_file)
-    #         save_path_covariance = os.path.join(full_path, "classwise_covariances.pt")
-    #         torch.save(averaged_classwise_covariances, save_path_covariance)
-    #         print(f"Saved classwise covariances to {save_path_covariance}")
-            
-    #     if averaged_classwise_mu and log_file is not None:
-    #         full_path = os.path.dirname(log_file)
-    #         save_path_mu = os.path.join(full_path, "classwise_mu.pt")
-    #         torch.save(averaged_classwise_mu, save_path_mu)
-    #         print(f"Saved classwise means to {save_path_mu}")
-    # --------------------------------------------------------------------------
-
-    print(prints)
-    print()
     metrics.reset()
     return metrics_dict
 
@@ -716,7 +643,8 @@ def validate_one_epoch_scbm(
     device,
     test=False,
     concept_names_graph=None,
-    log_file=None
+    log_file=None,
+    **kwargs
 ):
     """
     Validate the Stochastic Concept Bottleneck Model (SCBM) for one epoch.
@@ -859,7 +787,8 @@ def validate_one_epoch_cbm(
     device,
     test=False,
     concept_names_graph=None,
-    log_file=None
+    log_file=None,
+    **kwargs
 ):
     """
     Validate a baseline method for one epoch.

@@ -211,7 +211,10 @@ def get_concept_groups(config):
 
 
 def save_synthetic_data(config, train, val, test, log_file):
-    synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.experiment_type)
+    if config.data.experiment_type is None:
+        synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm")
+    else:
+        synthetic_data_dir = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.experiment_type)
     os.makedirs(synthetic_data_dir, exist_ok=True)
 
     # Save dir name
@@ -273,4 +276,13 @@ def save_synthetic_data(config, train, val, test, log_file):
         f.write(f"data_dir: {save_dir}\n")
         
 
-    
+def make_analysis_loader(loader, batch_size, num_workers, pin_memory=True):
+    return DataLoader(
+        loader.dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
+    )

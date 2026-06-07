@@ -33,7 +33,7 @@ num_classes: 2 # Number of classes for the target variable
 num_concepts: 10 #100 # Number of observed concepts (same as obs_dim for data generation)
 num_residuals: 5 #25 # Number of residual factors (same as hid_dim for data generation)
 
-experiment_type: "easy" # easy, medium, hard
+experiment_type: null # easy, medium, hard
 # Easy experiment 
 
 # Data directory path

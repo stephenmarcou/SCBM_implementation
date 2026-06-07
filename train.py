@@ -19,7 +19,8 @@ import wandb
 from models.losses import create_loss
 from models.models import create_model
 
-from utils.data import get_data, get_empirical_covariance, get_concept_groups
+
+from utils.data import get_data, get_empirical_covariance, get_concept_groups, make_analysis_loader
 from utils.intervention import intervene_cbm, intervene_scbm
 from utils.training import (
     freeze_module,
@@ -380,6 +381,7 @@ def train(config):
         metrics_dict = validate_one_epoch(
             val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
         )
+        
         best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(
             config=config, model=model, metrics_dict=metrics_dict, best_val_acc=best_val_acc, 
             best_model_path=best_model_path, epochs_without_improvement=epochs_without_improvement, log_file=log_file)
@@ -428,6 +430,11 @@ def train(config):
         print("Done with this hyperparameter setting. Moving to the next one...\n\n")
         return None
     
+    
+    
+    
+    
+    
     print("\nFINAL EVALUATION ON THE TEST SET:\n")
     validate_one_epoch(
         test_loader,
@@ -439,8 +446,59 @@ def train(config):
         device,
         test=True,
         concept_names_graph=concept_names_graph,
-        log_file=log_file
+        log_file=log_file,
+        save_residual_meta_data_folder="test"
     )
+    
+    
+    # ---------------------------------------------------------
+    # Save residual meta data for analysis of concept discovery
+    # ---------------------------------------------------------
+    if config.model.model == "scbm_residual" and config.data.save_residual_channel:
+        train_analysis_loader = make_analysis_loader(
+            train_loader,
+            batch_size=config.model.val_batch_size,
+            num_workers=config.workers,
+        )
+        val_analysis_loader = make_analysis_loader(
+            val_loader,
+            batch_size=config.model.val_batch_size,
+            num_workers=config.workers,
+        )
+
+        validate_one_epoch(
+            val_analysis_loader,
+            model,
+            metrics,
+            t_epochs,
+            config,
+            loss_fn,
+            device,
+            test=False,
+            concept_names_graph=concept_names_graph,
+            log_file=log_file,
+            save_residual_meta_data_folder="val",
+            metrics_only_for_saving=True,
+        )
+
+        validate_one_epoch(
+            train_analysis_loader,
+            model,
+            metrics,
+            t_epochs,
+            config,
+            loss_fn,
+            device,
+            test=False,
+            concept_names_graph=concept_names_graph,
+            log_file=log_file,
+            save_residual_meta_data_folder="train",
+            metrics_only_for_saving=True,
+        )
+        
+
+       
+    
 
     if config.train_only:
         wandb.finish(quiet=True)
