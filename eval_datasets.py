@@ -336,7 +336,10 @@ def train(config):
     
     
 def open_synthetic_data_log_file_and_write_info(config, log_file, data_dir_name):
-    data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", data_dir_name)
+    if config.data.experiment_type:
+        data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.experiment_type, data_dir_name)
+    else:
+        data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", data_dir_name)
     info_file = os.path.join(data_dir_full_path, "info.txt")
     with open(log_file, "a") as f:
         with open(info_file, "r") as info_f:

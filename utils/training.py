@@ -449,12 +449,19 @@ def validate_one_epoch_scbm_residual(
 
 
     
-    residual_probs_mean = []
-    residual_prob_std = []
-    residual_mean = []
-    residual_std = []
+    residual_probs_mean_list = []
+    residual_prob_std_list = []
+    residual_mean_list = []
+    residual_std_list = []
     
     res_mu_list = []
+    
+    concepts_residual_probs_mean_list = []
+    concepts_residual_prob_std_list = []
+    concepts_residual_mean_list = []
+    concepts_residual_std_list = []
+    
+    c_res_mu_list = []
     
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
@@ -508,11 +515,36 @@ def validate_one_epoch_scbm_residual(
                 residuals_sample_mean = residuals_mcmc.float().mean(dim=-1)
                 residuals_sample_std = residuals_mcmc.float().std(dim=-1, unbiased=False)
 
-                residual_probs_mean.append(residuals_pred_probs.cpu())
-                residual_prob_std.append(residuals_prob_std.cpu())
+                residual_probs_mean_list.append(residuals_pred_probs.cpu())
+                residual_prob_std_list.append(residuals_prob_std.cpu())
 
-                residual_mean.append(residuals_sample_mean.cpu())
-                residual_std.append(residuals_sample_std.cpu())
+                residual_mean_list.append(residuals_sample_mean.cpu())
+                residual_std_list.append(residuals_sample_std.cpu())
+                
+            if config.data.save_concept_and_residual_channel and save_residual_meta_data_folder:
+                concepts_residuals_mcmc_probs_detached = concepts_residuals_mcmc_probs.detach()
+
+                concepts_residuals_mcmc_detached = concepts_residuals_mcmc.detach()
+                
+                c_res_mu_detached = c_res_mu[:, config.data.num_concepts:].detach()
+                
+                c_res_mu_list.append(c_res_mu_detached.cpu())
+
+                concepts_residuals_pred_probs = concepts_residuals_mcmc_probs_detached.mean(dim=-1)
+                concepts_residuals_prob_std = concepts_residuals_mcmc_probs_detached.std(dim=-1, unbiased=False)
+                
+                concepts_residuals_sample_mean = concepts_residuals_mcmc_detached.float().mean(dim=-1)
+                concepts_residuals_sample_std = concepts_residuals_mcmc_detached.float().std(dim=-1, unbiased=False)
+                
+                concepts_residual_probs_mean_list.append(concepts_residuals_pred_probs.cpu())
+                concepts_residual_prob_std_list.append(concepts_residuals_prob_std.cpu())
+                
+                concepts_residual_mean_list.append(concepts_residuals_sample_mean.cpu())
+                concepts_residual_std_list.append(concepts_residuals_sample_std.cpu())
+                
+                
+                
+                
                 
                 
             
@@ -591,10 +623,10 @@ def validate_one_epoch_scbm_residual(
         print()
 
     if config.data.save_residual_channel and save_residual_meta_data_folder:
-        residuals_mean_tensor = torch.cat(residual_mean, dim=0)
-        residuals_std_tensor = torch.cat(residual_std, dim=0)
-        residual_probs_mean_tensor = torch.cat(residual_probs_mean, dim=0)
-        residual_probs_std_tensor = torch.cat(residual_prob_std, dim=0)
+        residuals_mean_tensor = torch.cat(residual_mean_list, dim=0)
+        residuals_std_tensor = torch.cat(residual_std_list, dim=0)
+        residual_probs_mean_tensor = torch.cat(residual_probs_mean_list, dim=0)
+        residual_probs_std_tensor = torch.cat(residual_prob_std_list, dim=0)
         res_mu_tensor = torch.cat(res_mu_list, dim=0)
 
         parent_dir_path = os.path.dirname(log_file)
@@ -620,7 +652,35 @@ def validate_one_epoch_scbm_residual(
         print(f"Saved residual mu to {save_path_res_mu}")
 
 
+    if config.data.save_concept_and_residual_channel and save_residual_meta_data_folder:
+        concepts_residuals_mean_tensor = torch.cat(concepts_residual_mean_list, dim=0)
+        concepts_residuals_std_tensor = torch.cat(concepts_residual_std_list, dim=0)
+        concepts_residuals_probs_mean_tensor = torch.cat(concepts_residual_probs_mean_list, dim=0)
+        concepts_residuals_probs_std_tensor = torch.cat(concepts_residual_prob_std_list, dim=0)
+        c_res_mu_tensor = torch.cat(c_res_mu_list, dim=0)
 
+        save_path_concepts_residual_mean = os.path.join(full_path, "concepts_residuals_sample_mean.pt")
+        save_path_concepts_residual_std = os.path.join(full_path, "concepts_residuals_sample_std.pt")
+        save_path_concepts_residual_probs_mean = os.path.join(full_path, "concepts_residuals_pred_probs_mean.pt")
+        save_path_concepts_residual_probs_std = os.path.join(full_path, "concepts_residuals_pred_probs_std.pt")
+        save_path_c_res_mu = os.path.join(full_path, "c_res_mu.pt")
+
+        torch.save(concepts_residuals_mean_tensor, save_path_concepts_residual_mean)
+        torch.save(concepts_residuals_std_tensor, save_path_concepts_residual_std)
+        torch.save(concepts_residuals_probs_mean_tensor, save_path_concepts_residual_probs_mean)
+        torch.save(concepts_residuals_probs_std_tensor, save_path_concepts_residual_probs_std)
+        torch.save(c_res_mu_tensor, save_path_c_res_mu)
+
+        print(f"Saved concepts residuals means to {save_path_concepts_residual_mean}")
+        print(f"Saved concepts residuals stds to {save_path_concepts_residual_std}")
+        print(f"Saved concepts residuals predicted probabilities means to {save_path_concepts_residual_probs_mean}")
+        print(f"Saved concepts residuals predicted probabilities stds to {save_path_concepts_residual_probs_std}")
+        print(f"Saved c_res_mu to {save_path_c_res_mu}")
+    
+    
+    
+    
+    
     metrics.reset()
     return metrics_dict
 
