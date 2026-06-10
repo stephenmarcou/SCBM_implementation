@@ -659,6 +659,13 @@ def validate_one_epoch_scbm_residual(
         concepts_residuals_probs_std_tensor = torch.cat(concepts_residual_prob_std_list, dim=0)
         c_res_mu_tensor = torch.cat(c_res_mu_list, dim=0)
 
+        parent_dir_path = os.path.dirname(log_file)
+        full_path = os.path.join(parent_dir_path, save_residual_meta_data_folder)
+        Path(full_path).mkdir(parents=True, exist_ok=True)
+
+
+
+
         save_path_concepts_residual_mean = os.path.join(full_path, "concepts_residuals_sample_mean.pt")
         save_path_concepts_residual_std = os.path.join(full_path, "concepts_residuals_sample_std.pt")
         save_path_concepts_residual_probs_mean = os.path.join(full_path, "concepts_residuals_pred_probs_mean.pt")
