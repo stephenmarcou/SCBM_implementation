@@ -454,7 +454,7 @@ def train(config):
     # ---------------------------------------------------------
     # Save residual meta data for analysis of concept discovery
     # ---------------------------------------------------------
-    if config.model.model == "scbm_residual" and config.data.save_residual_channel:
+    if config.model.model == "scbm_residual" and (config.data.save_residual_channel or config.data.save_concept_and_residual_channel):
         train_analysis_loader = make_analysis_loader(
             train_loader,
             batch_size=config.model.val_batch_size,
