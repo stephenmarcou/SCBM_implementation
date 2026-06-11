@@ -526,7 +526,7 @@ def validate_one_epoch_scbm_residual(
 
                 concepts_residuals_mcmc_detached = concepts_residuals_mcmc.detach()
                 
-                c_res_mu_detached = c_res_mu[:, config.data.num_concepts:].detach()
+                c_res_mu_detached = c_res_mu.detach()
                 
                 c_res_mu_list.append(c_res_mu_detached.cpu())
 
