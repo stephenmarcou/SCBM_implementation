@@ -1,0 +1,31 @@
+seed: 0
+
+data:
+  data_path: "datasets/"
+
+  dataset: "synthetic_res_scbm"
+  save_data: false
+  save_residual_channel: false
+  save_concept_and_residual_channel: false
+
+  alpha: 1.0
+  beta: 1.0
+  task_sparsity_obs: 0.3
+  task_sparsity_hid: 0.5
+  rho_cr: 0
+  rho_cc: 1
+  rho_rr: 1
+  sigma_x: 0.5
+  latent_rank: 5
+  num_covariates: 100
+  n_samples: 50000
+  train_ratio: 0.6
+  val_ratio: 0.2
+  obs_dim: 10
+  hid_dim: 5
+  num_classes: 2
+  num_concepts: 10
+  num_residuals: 5
+
+  experiment_type: null
+  data_dir_name: null

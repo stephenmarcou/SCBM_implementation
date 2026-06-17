@@ -115,11 +115,25 @@ class SyntheticResidualSCBMDataset(Dataset):
         concept_signal = concepts * concept_strengths 
         residual_signal = residuals * residual_strengths
 
-        # x is generated from concept presence + strength
+        # ------------------------------------------------------------
+        # 3. Generate observed features x from latent variables eta
+        # ------------------------------------------------------------
         if dataset_difficulty == "easy":
             eta_for_x = np.concatenate([concepts, residuals], axis=1)
         elif dataset_difficulty == "hard" or dataset_difficulty == "medium":
+            # TRY CONCEPT STRENGTHS INSTEAD
             eta_for_x = np.concatenate([concept_signal, residual_signal], axis=1)
+        elif dataset_difficulty == "new_approach":
+            eta_for_x = np.concatenate([
+                concepts,
+                residuals,
+                0.5 * concept_signal,
+                0.5 * residual_signal,
+            ], axis=1)
+
+            sigma_x = 0.1 or 0.2
+            alpha = 0.5
+            beta = 2.0
 
         x = self._random_mlp_features(
             eta=eta_for_x,
@@ -128,7 +142,9 @@ class SyntheticResidualSCBMDataset(Dataset):
             sigma_x=sigma_x,
         )
 
-        # Global sparse task weights
+        # ------------------------------------------------------------
+        # 4. Generate task label y from concepts and residuals
+        # ------------------------------------------------------------
         w_obs = self._make_sparse_weights(self.obs_dim, task_sparsity_obs, rng)
         w_hid = self._make_sparse_weights(self.hid_dim, task_sparsity_hid, rng)
 
@@ -143,7 +159,7 @@ class SyntheticResidualSCBMDataset(Dataset):
         s = alpha * s_concepts + beta * s_residuals
 
         # ------------------------------------------------------------
-        # 6. Convert continuous score to balanced binary label
+        # 5. Convert continuous score to balanced binary label
         # ------------------------------------------------------------
         threshold = np.median(s)
         y = (s >= threshold).astype(np.int64)
