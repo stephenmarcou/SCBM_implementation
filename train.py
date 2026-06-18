@@ -535,6 +535,13 @@ def check_CUB_data(config):
         # In case we are using incomplete dataset, we need to update the number of concepts in the config based on the dataset we are loading
         config.data.num_concepts = len(train_data[0]["attribute_label"])
         
+        
+def check_synthetic_res_scbm_data(config):
+    if config.data.data_dir_name is not None:
+        train_data, val_data, test_data = load_saved_synthetic_data(config)
+        config.data.num_concepts = train_data["concepts"].shape[1]
+        
+
 
     
         
@@ -577,6 +584,8 @@ def main(config: DictConfig):
     if config.incomplete and config.data.dataset == "CUB":
         print("Incomplete CUB run")
         check_CUB_data(config)
+    if config.data.dataset == "synthetic_res_scbm":
+        check_synthetic_res_scbm_data(config)
         
     # if config.data.dataset == "synthetic_res_scbm":
     #     check_synthetic_res_scbm_data(config)

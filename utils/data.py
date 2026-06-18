@@ -223,7 +223,7 @@ def save_synthetic_data(config, train, val, test, log_file):
         save_name = "cluster_"
     else:
         save_name = "local_"
-    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_rho_cr{config.data.rho_cr}_rho_cc{config.data.rho_cc}_rho_rr{config.data.rho_rr}_r_sparsity_{config.data.task_sparsity_hid}_c_sparsity_{config.data.task_sparsity_obs}_sigmax_{config.data.sigma_x}_seed_{config.seed}"
+    save_name += f"a_{config.data.alpha}_b_{config.data.beta}_rho_cr{config.data.rho_cr}_rho_cc{config.data.rho_cc}_rho_rr{config.data.rho_rr}_r_sparsity_{config.data.task_sparsity_hid}_c_sparsity_{config.data.task_sparsity_obs}_sigmax_{config.data.sigma_x}_hid_dim_{config.data.hid_dim}_obs_dim_{config.data.obs_dim}_seed_{config.seed}"
     
     
     
