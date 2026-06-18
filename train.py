@@ -541,6 +541,10 @@ def check_synthetic_res_scbm_data(config):
         train_data, val_data, test_data = load_saved_synthetic_data(config)
         config.data.num_concepts = train_data["concepts"].shape[1]
         
+    if config.data.data_dir_name is None and config.data.num_concepts != config.data.obs_dim:
+        config.data.num_concepts = config.data.obs_dim
+    
+        
 
 
     
