@@ -11,7 +11,7 @@ from torchmetrics import Metric
 import wandb
 import os
 
-from utils.metrics import calc_target_metrics, calc_concept_metrics
+from utils.metrics import calc_target_metrics, calc_concept_metrics, calc_regression_target_metrics
 from utils.plotting import compute_and_plot_heatmap
 from utils.utils import numerical_stability_check
 
@@ -100,6 +100,12 @@ def train_one_epoch_scbm_residual(
         # Backward pass depends on the training mode of the model
         optimizer.zero_grad()
 
+
+        # target_pred_logits for multiclass classification are logprobabilities
+        # while for binary classification they are logits
+        # However we can still use cross_entropy for multiclass classification since it is identical
+        # to NLL when the input is log_probabilities.
+        # For regression tasks, target_pred_logits are the average predicted values across monte carlo samples and we use MSE loss.
     
                 
 
@@ -1144,6 +1150,220 @@ class Custom_Metrics(Metric):
             )  # | c_metrics_per_concept # Update dict
 
         return metrics
+
+
+
+
+class Custom_Regression_Metrics(Metric):
+    """
+    Metrics class for regression target prediction with binary concept prediction.
+
+    Tracks:
+    - target regression loss
+    - concept loss
+    - total loss
+    - MSE, RMSE, MAE, R2 for target regression
+    - concept accuracy, complete concept accuracy, concept Jaccard
+    """
+
+    def __init__(self, n_concepts, device):
+        super().__init__()
+
+        self.n_concepts = n_concepts
+
+        self.add_state("target_loss", default=torch.tensor(0.0, device=device))
+        self.add_state("concepts_loss", default=torch.tensor(0.0, device=device))
+        self.add_state("total_loss", default=torch.tensor(0.0, device=device))
+
+        self.add_state("y_true", default=[])
+        self.add_state("y_pred", default=[])
+
+        self.add_state("c_true", default=[])
+        self.add_state("c_pred_probs", default=[])
+
+        self.add_state("cov_norm", default=torch.tensor(0.0, device=device))
+        self.add_state(
+            "n_samples",
+            default=torch.tensor(0, dtype=torch.int, device=device),
+        )
+
+        self.add_state("prec_loss", default=torch.tensor(0.0, device=device))
+        self.add_state("l_int_loss", default=torch.tensor(0.0, device=device))
+        self.add_state("l_int_extension_loss", default=torch.tensor(0.0, device=device))
+
+    def update(
+        self,
+        target_loss: torch.Tensor,
+        concepts_loss: torch.Tensor,
+        total_loss: torch.Tensor,
+        y_true: torch.Tensor,
+        y_pred: torch.Tensor,
+        c_true: torch.Tensor,
+        c_pred_probs: torch.Tensor,
+        cov_norm: torch.Tensor = None,
+        prec_loss: torch.Tensor = None,
+        L_int_loss: torch.Tensor = None,
+        L_int_extension_loss: torch.Tensor = None,
+    ):
+        assert c_true.shape == c_pred_probs.shape, (
+            f"Shape of true concepts {c_true.shape} and predicted concept "
+            f"probabilities {c_pred_probs.shape} must be the same."
+        )
+
+        n_samples = y_true.size(0)
+        self.n_samples += n_samples
+
+        self.target_loss += target_loss.detach() * n_samples
+        self.concepts_loss += concepts_loss.detach() * n_samples
+        self.total_loss += total_loss.detach() * n_samples
+
+        self.y_true.append(y_true.detach())
+        self.y_pred.append(y_pred.detach())
+
+        self.c_true.append(c_true.detach())
+        self.c_pred_probs.append(c_pred_probs.detach())
+
+        if cov_norm is not None:
+            self.cov_norm += cov_norm.detach() * n_samples
+
+        if prec_loss is not None:
+            self.prec_loss += prec_loss.detach() * n_samples
+
+        if L_int_loss is not None:
+            self.l_int_loss += L_int_loss.detach() * n_samples
+
+        if L_int_extension_loss is not None:
+            self.l_int_extension_loss += L_int_extension_loss.detach() * n_samples
+
+    def compute(self, validation=False, config=None):
+        y_true = torch.cat(self.y_true, dim=0).cpu().float()
+        y_pred = torch.cat(self.y_pred, dim=0).cpu().float()
+
+        c_true = torch.cat(self.c_true, dim=0).cpu()
+        c_pred_probs = torch.cat(self.c_pred_probs, dim=0).cpu()
+
+        # Make sure y_true and y_pred have matching shape.
+        # For example, both [N] or both [N, 1].
+        y_true = y_true.view(y_pred.shape)
+
+        # -------------------------
+        # Regression target metrics
+        # -------------------------
+        errors = y_pred - y_true
+
+        mse = torch.mean(errors ** 2)
+        rmse = torch.sqrt(mse)
+        mae = torch.mean(torch.abs(errors))
+
+        ss_res = torch.sum((y_true - y_pred) ** 2)
+        ss_tot = torch.sum((y_true - torch.mean(y_true)) ** 2)
+
+        r2 = 1.0 - ss_res / (ss_tot + 1e-8)
+
+        # Optional: Pearson correlation
+        y_true_centered = y_true - y_true.mean()
+        y_pred_centered = y_pred - y_pred.mean()
+
+        pearson = torch.sum(y_true_centered * y_pred_centered) / (
+            torch.sqrt(torch.sum(y_true_centered ** 2))
+            * torch.sqrt(torch.sum(y_pred_centered ** 2))
+            + 1e-8
+        )
+
+        # -------------------------
+        # Binary concept metrics
+        # -------------------------
+        c_pred = c_pred_probs > 0.5
+
+        concept_acc = (c_true == c_pred).sum() / (
+            self.n_samples * self.n_concepts
+        )
+
+        complete_concept_acc = (
+            (c_true == c_pred).sum(dim=1) == self.n_concepts
+        ).sum() / self.n_samples
+
+        concept_jaccard = jaccard_score(
+            c_true.numpy(),
+            c_pred.numpy(),
+            average="micro",
+        )
+
+        # -------------------------
+        # Base metrics dictionary
+        # -------------------------
+        metrics = {
+            "target_loss": self.target_loss / self.n_samples,
+            "concepts_loss": self.concepts_loss / self.n_samples,
+            "total_loss": self.total_loss / self.n_samples,
+
+            "y_mse": mse,
+            "y_rmse": rmse,
+            "y_mae": mae,
+            "y_r2": r2,
+            "y_pearson": pearson,
+
+            "c_accuracy": concept_acc,
+            "complete_c_accuracy": complete_concept_acc,
+            "concept_jaccard": concept_jaccard,
+        }
+
+        if self.prec_loss != 0:
+            metrics["prec_loss"] = self.prec_loss / self.n_samples
+
+        if self.l_int_loss != 0:
+            metrics["l_int_loss"] = self.l_int_loss / self.n_samples
+
+        if self.l_int_extension_loss != 0:
+            metrics["l_int_extension_loss"] = (
+                self.l_int_extension_loss / self.n_samples
+            )
+
+        if self.cov_norm != 0:
+            metrics["covariance_norm"] = self.cov_norm / self.n_samples
+            
+        if validation is True:
+            c_pred_probs_list = []
+            for j in range(self.n_concepts):
+                c_pred_probs_list.append(
+                    np.hstack(
+                        (
+                            np.expand_dims(1 - c_pred_probs[:, j], 1),
+                            np.expand_dims(c_pred_probs[:, j], 1),
+                        )
+                    )
+                )
+
+            y_metrics = calc_regression_target_metrics(
+                y_true.numpy(),
+                y_pred.numpy(),
+            )
+
+            c_metrics, _ = calc_concept_metrics(
+                c_true.numpy(),
+                c_pred_probs_list,
+                config.data,
+            )
+
+            metrics = (
+                metrics
+                | {f"y_{k}": v for k, v in y_metrics.items()}
+                | {f"c_{k}": v for k, v in c_metrics.items()}
+            )
+                        
+
+        return metrics
+
+
+
+
+
+
+
+
+
+
+
 
 
 def freeze_module(m):

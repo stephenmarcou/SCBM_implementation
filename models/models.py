@@ -110,6 +110,11 @@ class SCBM(nn.Module):
         self.final_temp = 0.5
         self.temp_decay_rate = (math.log(self.final_temp) - math.log(self.init_temp)) / float(self.num_epochs)
         
+        # Regression model
+        self.regression_task = config_model.regression_task
+        
+        
+        
 
         # Architectures
         # Encoder h(.)
@@ -177,10 +182,13 @@ class SCBM(nn.Module):
         self.act_c = nn.Sigmoid()
 
         # Link function g(.)
-        if self.num_classes == 2:
+        if self.regression_task:
             self.pred_dim = 1
-        elif self.num_classes > 2:
-            self.pred_dim = self.num_classes
+        else:
+            if self.num_classes == 2:
+                self.pred_dim = 1
+            elif self.num_classes > 2:
+                self.pred_dim = self.num_classes
 
         # Final target predictor head 
         if self.head_arch == "linear":
@@ -292,6 +300,14 @@ class SCBM(nn.Module):
         x_flat = x.permute(0, 2, 1).reshape(B * M, C)        # [B*M, C]
         y_logits_flat = self.head(x_flat)                     # [B*M, K] or [B*M, 1]
 
+        if self.regression_task:
+            # Regression: average predictions
+            y_pred_logits = y_logits_flat.view(B, M, self.pred_dim).mean(dim=1)  # [B, 1]
+            return y_pred_logits
+
+
+
+
         if self.pred_dim == 1:
             # Binary: average Bernoulli probs then convert back to logits
             y_probs = torch.sigmoid(y_logits_flat).view(B, M, 1).mean(dim=1)  # [B, 1]
@@ -304,9 +320,14 @@ class SCBM(nn.Module):
             y_pred_log_probs = torch.logsumexp(y_log_probs, dim=1) - math.log(M)          # [B, K]
             return y_pred_log_probs
 
+
+
+
     def intervene(self, c_mcmc_probs, c_mcmc_logits):
         y_pred_probs_i = 0
         c_hard = torch.bernoulli(c_mcmc_probs)
+        # For each monte carlo sample, compute the predicted target probability and average them
+        # For regression, we just average the predicted values
         for i in range(self.num_monte_carlo):
             if self.concept_learning == "soft":
                 c_i = c_mcmc_logits[:, :, i]
@@ -314,15 +335,26 @@ class SCBM(nn.Module):
                 c_i = c_hard[:, :, i]
 
             y_pred_logits_i = self.head(c_i)
-            if self.pred_dim == 1:
-                y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
+            
+            
+            if self.regression_task:
+                y_pred_probs_i += y_pred_logits_i
             else:
-                y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
+                if self.pred_dim == 1:
+                    y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
+                else:
+                    y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
 
         y_pred_probs = y_pred_probs_i / self.num_monte_carlo
+        
+        if self.regression_task:
+            return y_pred_probs
+        
+        
         if self.pred_dim == 1:
             y_pred_logits = torch.logit(y_pred_probs, eps=1e-6)
         else:
+            # log(1/M * sum_i p_i)
             y_pred_logits = torch.log(y_pred_probs + 1e-6)
 
         return y_pred_logits
@@ -404,6 +436,9 @@ class SCBM_residual(nn.Module):
         self.final_temp = 0.5
         self.temp_decay_rate = (math.log(self.final_temp) - math.log(self.init_temp)) / float(self.num_epochs)
         
+        
+        # Regression model
+        self.regression_task = config_model.regression_task
 
         # Architectures
         # Encoder h(.)
@@ -471,10 +506,13 @@ class SCBM_residual(nn.Module):
         self.act_c = nn.Sigmoid()
 
         # Link function g(.)
-        if self.num_classes == 2:
+        if self.regression_task:
             self.pred_dim = 1
-        elif self.num_classes > 2:
-            self.pred_dim = self.num_classes
+        else:
+            if self.num_classes == 2:
+                self.pred_dim = 1
+            elif self.num_classes > 2:
+                self.pred_dim = self.num_classes
 
         # Final target predictor head 
         if self.head_arch == "linear":
@@ -650,6 +688,12 @@ class SCBM_residual(nn.Module):
         x_flat = x.permute(0, 2, 1).reshape(B * M, C)        # [B*M, C]
         y_logits_flat = self.head(x_flat)                     # [B*M, K] or [B*M, 1]
 
+
+        if self.regression_task:
+            # Regression: average predictions
+            y_pred_logits = y_logits_flat.view(B, M, self.pred_dim).mean(dim=1)  # [B, 1]
+            return y_pred_logits
+
         if self.pred_dim == 1:
             # Binary: average Bernoulli probs then convert back to logits
             y_probs = torch.sigmoid(y_logits_flat).view(B, M, 1).mean(dim=1)  # [B, 1]
@@ -663,6 +707,9 @@ class SCBM_residual(nn.Module):
             return y_pred_log_probs
 
     def intervene(self, c_mcmc_probs, c_mcmc_logits):
+        """ 
+        
+        """
         y_pred_probs_i = 0
         c_hard = torch.bernoulli(c_mcmc_probs)
         for i in range(self.num_monte_carlo):
@@ -672,15 +719,25 @@ class SCBM_residual(nn.Module):
                 c_i = c_hard[:, :, i]
 
             y_pred_logits_i = self.head(c_i)
-            if self.pred_dim == 1:
-                y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
+            
+            if self.regression_task:
+                y_pred_probs_i += y_pred_logits_i
             else:
-                y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
+                if self.pred_dim == 1:
+                    y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
+                else:
+                    y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
 
         y_pred_probs = y_pred_probs_i / self.num_monte_carlo
+        
+        
+        if self.regression_task:
+            return y_pred_probs
+        
         if self.pred_dim == 1:
             y_pred_logits = torch.logit(y_pred_probs, eps=1e-6)
         else:
+            # log(1/M * sum_i p_i)
             y_pred_logits = torch.log(y_pred_probs + 1e-6)
 
         return y_pred_logits
@@ -697,12 +754,23 @@ class SCBM_residual(nn.Module):
             c_i = c_input[:, :, i]
 
             y_pred_logits_i = self.head(c_i)
-            if self.pred_dim == 1:
-                y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
+            
+            
+            if self.regression_task:
+                y_pred_probs_i += y_pred_logits_i
             else:
-                y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
+                
+                if self.pred_dim == 1:
+                    y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
+                else:
+                    y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
 
         y_pred_probs = y_pred_probs_i / self.num_monte_carlo
+        
+        if self.regression_task:
+            return y_pred_probs
+        
+        
         if self.pred_dim == 1:
             y_pred_logits = torch.logit(y_pred_probs, eps=1e-6)
         else:
@@ -723,6 +791,10 @@ class SCBM_residual(nn.Module):
         c_flat = c_input.permute(0, 2, 1).reshape(B * M, C)
 
         y_logits_flat = self.head(c_flat)
+        
+        if self.regression_task:
+            y_pred_logits = y_logits_flat.view(B, M, self.pred_dim).mean(dim=1)  # [B, 1]
+            return y_pred_logits
 
         if self.pred_dim == 1:
             y_probs = torch.sigmoid(y_logits_flat).view(B, M, 1).mean(dim=1)
@@ -762,7 +834,7 @@ class CBM(nn.Module):
     Model class encompassing all baselines: Hard & Soft Concept Bottleneck Model (CBM),
                                             Concept Embedding Model (CEM), and Autoregressive CBM (AR).
 
-    This class implements the baselines. Depending on the choice of model, only a small part of the full code is used.
+    This class implements the baselines. Depending on the choice of modely a small part of the full code is used.
     Check the if statements in the forward method to see which part of the code is used for which model.
 
     Args:

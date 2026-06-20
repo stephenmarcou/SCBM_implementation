@@ -124,6 +124,40 @@ def calc_target_metrics(ys, scores_pred, config, n_decimals=4, n_bins_cal=10):
     }
 
 
+
+def calc_regression_target_metrics(ys, y_pred, n_decimals=4):
+    ys = np.asarray(ys).reshape(-1)
+    y_pred = np.asarray(y_pred).reshape(-1)
+
+    errors = y_pred - ys
+
+    mse = np.mean(errors ** 2)
+    rmse = np.sqrt(mse)
+    mae = np.mean(np.abs(errors))
+
+    ss_res = np.sum((ys - y_pred) ** 2)
+    ss_tot = np.sum((ys - np.mean(ys)) ** 2)
+    r2 = 1.0 - ss_res / (ss_tot + 1e-8)
+
+    # Optional: Pearson correlation
+    if np.std(ys) < 1e-8 or np.std(y_pred) < 1e-8:
+        pearson = 0.0
+    else:
+        pearson = np.corrcoef(ys, y_pred)[0, 1]
+
+    return {
+        "MSE": np.round(mse, n_decimals),
+        "RMSE": np.round(rmse, n_decimals),
+        "MAE": np.round(mae, n_decimals),
+        "R2": np.round(r2, n_decimals),
+        "Pearson": np.round(pearson, n_decimals),
+    }
+
+
+
+
+
+
 def calc_concept_metrics(cs, concepts_pred_probs, config, n_decimals=4, n_bins_cal=10):
     num_concepts = cs.shape[1]
 

@@ -165,7 +165,6 @@ def get_dataloaders(config, gen):
     elif dataset == "CUB":
         print("CUB DATASET")
     
-        
         train_data, val_data, test_data = get_CUB_dataloaders(
             config.data, config.incomplete
         )

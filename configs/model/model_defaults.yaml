@@ -28,3 +28,6 @@ straight_through: True # If Gumbel-Softmax, whether to do straight-through or no
 
 # Intervention 
 max_interventions: 200 # I added
+
+# Regression task
+regression_task: False # Whether the task is regression or classification. If True, the model

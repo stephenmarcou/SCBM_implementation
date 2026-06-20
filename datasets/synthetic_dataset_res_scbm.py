@@ -52,6 +52,7 @@ class SyntheticResidualSCBMDataset(Dataset):
         task_sparsity_hid,
         seed,
         dataset_difficulty,
+        regression_task=False,
         indices=None
     ):
         super().__init__()
@@ -68,7 +69,7 @@ class SyntheticResidualSCBMDataset(Dataset):
         self.rho_rr = rho_rr
         self.sigma_x = sigma_x
         self.seed = seed
-        
+        self.regression_task = regression_task
         self.task_sparsity_obs = task_sparsity_obs
         self.task_sparsity_hid = task_sparsity_hid
         self.latent_rank = latent_rank
@@ -161,8 +162,12 @@ class SyntheticResidualSCBMDataset(Dataset):
         # ------------------------------------------------------------
         # 5. Convert continuous score to balanced binary label
         # ------------------------------------------------------------
-        threshold = np.median(s)
-        y = (s >= threshold).astype(np.int64)
+        
+        if self.regression_task:
+            y = s.astype(np.float32)
+        else:
+            threshold = np.median(s)
+            y = (s >= threshold).astype(np.int64)
 
         # ------------------------------------------------------------
         # Store everything
@@ -177,7 +182,8 @@ class SyntheticResidualSCBMDataset(Dataset):
         self.Sigma = torch.tensor(Sigma, dtype=torch.float32)
         self.w_obs = torch.tensor(w_obs, dtype=torch.float32)
         self.w_hid = torch.tensor(w_hid, dtype=torch.float32)
-        self.threshold = float(threshold)
+        if not self.regression_task:
+            self.threshold = float(threshold)
         self.eta_concepts = torch.tensor(eta_concepts, dtype=torch.float32)
         self.eta_residuals = torch.tensor(eta_residuals, dtype=torch.float32)
         self.concept_signal = torch.tensor(concept_signal, dtype=torch.float32)
@@ -450,6 +456,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         task_sparsity_hid=config.data.task_sparsity_hid,
         dataset_difficulty=config.data.experiment_type,
         seed=seed,
+        regression_task=config.model.regression_task
     )
     
     valid_dataset = SyntheticResidualSCBMDataset(
@@ -469,6 +476,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         task_sparsity_hid=config.data.task_sparsity_hid,
         dataset_difficulty=config.data.experiment_type,
         seed=seed,  
+        regression_task=config.model.regression_task
     )
     
     test_dataset = SyntheticResidualSCBMDataset(
@@ -488,6 +496,7 @@ def get_synthetic_datasets_res_scbm(config, seed=0, log_file=None):
         task_sparsity_hid=config.data.task_sparsity_hid,
         dataset_difficulty=config.data.experiment_type,
         seed=seed, 
+        regression_task=config.model.regression_task
     )
     
     if log_file is not None:

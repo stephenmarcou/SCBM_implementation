@@ -23,6 +23,7 @@ from models.models import create_model
 from utils.data import get_data, get_empirical_covariance, get_concept_groups, make_analysis_loader
 from utils.intervention import intervene_cbm, intervene_scbm
 from utils.training import (
+    Custom_Regression_Metrics,
     freeze_module,
     unfreeze_module,
     create_optimizer,
@@ -36,45 +37,79 @@ from utils.training import (
 )
 from utils.utils import reset_random_seeds
 from datasets.CUB_dataset import create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
-
-#from datasets.synthetic_dataset_res_scbm import create_synthetic_datasets_res_scbm, load_saved_synthetic_data
-
+from datasets.synthetic_dataset_res_scbm import load_saved_synthetic_data
 
 
-def maybe_save_best_model(config, model, metrics_dict, best_val_acc, best_model_path, epochs_without_improvement, log_file):
+
+
+
+def maybe_save_best_model(
+    config,
+    model,
+    metrics_dict,
+    best_val_metric,
+    best_model_path,
+    epochs_without_improvement,
+    log_file,
+):
     """
-    Check if validation accuracy improved. If so, save checkpoint and reset patience counter.
-    Returns: (best_val_acc, epochs_without_improvement, should_stop_early)
+    Save model if validation metric improves.
+
+    For classification:
+        maximise y_accuracy
+
+    For regression:
+        minimise y_rmse
+
+    Returns:
+        best_val_metric, epochs_without_improvement, should_stop
     """
     patience = config.model.early_stopping_patience
-    y_val_acc = float(metrics_dict["y_accuracy"])
-    
-    if y_val_acc > best_val_acc:
-        best_val_acc = y_val_acc
+
+    if config.model.regression_task:
+        metric_name = "y_rmse"
+        metric_mode = "min"
+        y_val_metric = float(metrics_dict[metric_name])
+    else:
+        metric_name = "y_accuracy"
+        metric_mode = "max"
+        y_val_metric = float(metrics_dict[metric_name])
+
+    if metric_mode == "min":
+        improved = y_val_metric < best_val_metric
+    else:
+        improved = y_val_metric > best_val_metric
+
+    if improved:
+        best_val_metric = y_val_metric
         epochs_without_improvement = 0
+
         if config.save_model:
             torch.save(model.state_dict(), best_model_path)
             print(
-                f"New best validation y_accuracy: {best_val_acc:.4f}. Saved checkpoint to {best_model_path}",
+                f"New best validation {metric_name}: {best_val_metric:.4f}. "
+                f"Saved checkpoint to {best_model_path}",
                 flush=True,
             )
+
     else:
         epochs_without_improvement += 1
-    
+
     should_stop = epochs_without_improvement >= patience
+
     if should_stop:
-        print(
-            f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}",
-            flush=True,
+        message = (
+            f"Early stopping triggered: no improvement for {patience} epochs. "
+            f"Best val {metric_name}: {best_val_metric:.4f}"
         )
-        
+
+        print(message, flush=True)
+
         if config.save_model:
             with open(log_file, "a") as f:
-                f.write(
-                    f"Early stopping triggered: no improvement for {patience} epochs. Best val y_accuracy: {best_val_acc:.4f}\n"
-                )
-    
-    return best_val_acc, epochs_without_improvement, should_stop
+                f.write(message + "\n")
+
+    return best_val_metric, epochs_without_improvement, should_stop
 
 
 
@@ -140,6 +175,8 @@ def train(config):
     
     elif config.data.dataset == "synthetic_res_scbm":
         ex_name = config.save_name + "_" + ex_name
+        if config.model.regression_task:
+            ex_name = "regression_" + ex_name
         ex_name =  f"alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr{config.data.rho_cr}_rho_cc{config.data.rho_cc}_rho_rr{config.data.rho_rr}_sigma_x_{config.data.sigma_x}_" + ex_name
     
         
@@ -236,8 +273,15 @@ def train(config):
     model.to(device)
     loss_fn = create_loss(config)
 
-    metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
-    best_val_acc = float("-inf")
+    if config.model.regression_task:
+        metrics = Custom_Regression_Metrics(config.data.num_concepts, device).to(device)
+    else:
+        metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
+    
+    if config.model.regression_task:
+        best_val_metric = float("inf")      # because lower y_rmse is better
+    else:
+        best_val_metric = float("-inf")     # because higher y_accuracy is better
     best_model_path = join(experiment_path, "model_best.pth")
     patience = config.model.early_stopping_patience 
     epochs_without_improvement = 0
@@ -292,8 +336,8 @@ def train(config):
                 metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
-                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(config=config, model=model, metrics_dict=metrics_dict,
-                                                                                              best_val_acc=best_val_acc, best_model_path=best_model_path, 
+                best_val_metric, epochs_without_improvement, should_stop = maybe_save_best_model(config=config, model=model, metrics_dict=metrics_dict,
+                                                                                              best_val_metric=best_val_metric, best_model_path=best_model_path, 
                                                                                               epochs_without_improvement=epochs_without_improvement, log_file=log_file)
                 if should_stop:
                     break
@@ -335,8 +379,8 @@ def train(config):
                 metrics_dict = validate_one_epoch(
                     val_loader, model, metrics, epoch, config, loss_fn, device
                 )
-                best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(config=config, model=model, metrics_dict=metrics_dict, 
-                                                                                              best_val_acc=best_val_acc, best_model_path=best_model_path, 
+                best_val_metric, epochs_without_improvement, should_stop = maybe_save_best_model(config=config, model=model, metrics_dict=metrics_dict, 
+                                                                                              best_val_metric=best_val_metric, best_model_path=best_model_path, 
                                                                                               epochs_without_improvement=epochs_without_improvement, log_file=log_file)
                 if should_stop:
                     break
@@ -382,8 +426,8 @@ def train(config):
             val_loader, model, metrics, epoch, config, loss_fn, device, log_file=log_file
         )
         
-        best_val_acc, epochs_without_improvement, should_stop = maybe_save_best_model(
-            config=config, model=model, metrics_dict=metrics_dict, best_val_acc=best_val_acc, 
+        best_val_metric, epochs_without_improvement, should_stop = maybe_save_best_model(
+            config=config, model=model, metrics_dict=metrics_dict, best_val_metric=best_val_metric, 
             best_model_path=best_model_path, epochs_without_improvement=epochs_without_improvement, log_file=log_file)
         if should_stop:
             break
@@ -404,7 +448,12 @@ def train(config):
 
     model.apply(freeze_module)
     if config.save_model:
-        if best_val_acc > float("-inf") and Path(best_model_path).exists():
+        if config.model.regression_task:
+            metric_improved = best_val_metric < float("inf")
+        else:
+            metric_improved = best_val_metric > float("-inf")
+
+        if metric_improved and Path(best_model_path).exists():
             model.load_state_dict(torch.load(best_model_path, map_location=device))
             print(f"Loaded best validation checkpoint from {best_model_path}\n", flush=True)
             with open(log_file, "a") as f:
@@ -539,7 +588,8 @@ def check_CUB_data(config):
 def check_synthetic_res_scbm_data(config):
     if config.data.data_dir_name is not None:
         train_data, val_data, test_data = load_saved_synthetic_data(config)
-        config.data.num_concepts = train_data["concepts"].shape[1]
+        config.data.num_concepts = train_data.concepts.shape[1]
+        
         
     if config.data.data_dir_name is None and config.data.num_concepts != config.data.obs_dim:
         config.data.num_concepts = config.data.obs_dim

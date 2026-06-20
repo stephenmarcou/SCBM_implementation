@@ -150,6 +150,8 @@ class SCBLoss(nn.Module):
 
         self.log_num_mc = math.log(config.num_monte_carlo)
         self.alpha = alpha if config.training_mode == "joint" else 1.0
+        
+        self.regression_task = config.regression_task
 
     def forward(
         self,
@@ -175,13 +177,22 @@ class SCBLoss(nn.Module):
             Tensor: Target loss, concept loss, precision loss, and total loss.
         """
         concepts_loss = self.compute_concept_loss(concepts_mcmc_probs, concepts_true)
-
-        if self.num_classes == 2:
+        
+        
+        # For regression task, target_pred_logits is actually the predicted target values, not logits. So we compute MSE loss directly.
+        if self.regression_task:
+            target_pred = target_pred_logits.squeeze(-1)
+            target_true = target_true.float().view_as(target_pred)
+            target_loss = F.mse_loss(target_pred, target_true, reduction="mean")
+            
+        elif self.num_classes == 2:
             # Logits to probs
             target_pred_probs = nn.Sigmoid()(target_pred_logits.squeeze(1))
             target_loss = F.binary_cross_entropy(
                 target_pred_probs, target_true.float(), reduction="mean"
             )
+        
+        # In case of num_classes > 2, target_pred_logits is actually log probabilties
         else:
             target_loss = F.cross_entropy(
                 target_pred_logits, target_true.long(), reduction="mean"
@@ -259,6 +270,8 @@ class SCBresLoss(nn.Module):
         self.L_int_loss_weight = config.L_int_loss_weight
         self.use_L_int_loss = config.use_L_int_loss
         self.concept_learning = config.concept_learning
+        
+        self.regression_task = config.regression_task
 
         self.log_num_mc = math.log(config.num_monte_carlo)
         self.alpha = alpha if config.training_mode == "joint" else 1.0
@@ -289,9 +302,14 @@ class SCBresLoss(nn.Module):
         #concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :self.num_concepts, :]
         concepts_loss = self.compute_concept_loss(concepts_mcmc_probs, concepts_true)
         
+        
+        if self.regression_task:
+            target_pred = target_pred_logits.squeeze(-1)
+            target_true = target_true.float().view_as(target_pred)
+            target_loss = F.mse_loss(target_pred, target_true, reduction="mean")
 
 
-        if self.num_classes == 2:
+        elif self.num_classes == 2:
             # Logits to probs
             target_pred_probs = nn.Sigmoid()(target_pred_logits.squeeze(1))
             target_loss = F.binary_cross_entropy(
@@ -402,7 +420,16 @@ class SCBresLoss(nn.Module):
                 c_res_intervened_logits,
             )
 
-        if self.num_classes == 2:
+
+        if self.regression_task:
+            y_true = y_true.float().view_as(y_int_logits)
+            return F.mse_loss(y_int_logits, y_true)
+
+
+
+
+
+        elif self.num_classes == 2:
             y_true = y_true.float().view(-1, 1)
             return F.binary_cross_entropy_with_logits(
                 y_int_logits,
@@ -474,7 +501,26 @@ class SCBresLoss(nn.Module):
         
         #target_pred_logits = model.intervene_straight_through(c_res_mcmc_probs, c_res_mcmc_logits)
         target_pred_logits = model.intervene_straight_through_vectorized(c_res_mcmc_probs, c_res_mcmc_logits)
-        L_int_extension_loss = F.nll_loss(target_pred_logits, target_true)
+        
+        if self.regression_task:
+            target_true = target_true.float().view_as(target_pred_logits)
+            L_int_extension_loss = F.mse_loss(
+                target_pred_logits,
+                target_true,
+                reduction="mean",
+            )
+        elif self.num_classes == 2:
+            target_true = target_true.float().view(-1, 1)
+            L_int_extension_loss = F.binary_cross_entropy_with_logits(
+                target_pred_logits,
+                target_true,
+            )
+        else:
+            target_true = target_true.long().view(-1)
+            L_int_extension_loss = F.nll_loss(
+                target_pred_logits,
+                target_true,
+            )
     
         return L_int_extension_loss
 

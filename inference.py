@@ -15,7 +15,7 @@ import wandb
 from models.losses import create_loss
 from utils.data import get_concept_groups, get_data, make_analysis_loader
 from utils.intervention import intervene_cbm, intervene_scbm, intervene_scbm_residual, intervene_scbm_residual_optimized
-from utils.training import Custom_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm, validate_one_epoch_scbm_residual
+from utils.training import Custom_Metrics, Custom_Regression_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm, validate_one_epoch_scbm_residual
 from utils.utils import reset_random_seeds
 import torch
 from models.models import create_model
@@ -120,7 +120,10 @@ def run(config):
     model.load_state_dict(state_dict)
     model.eval()
 
-    metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
+    if config.model.regression_task:
+        metrics = Custom_Regression_Metrics(config.data.num_concepts, device).to(device)
+    else:
+        metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
     loss_fn = create_loss(config)
     
     
