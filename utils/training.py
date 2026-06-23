@@ -611,6 +611,8 @@ def validate_one_epoch_scbm_residual(
     # Calculate and log metrics
     metrics_dict = metrics.compute(validation=True, config=config)
 
+    # When metrics_only_for_saving is True, we only want to save the metadata for concept discovery analysis but not log metrics
+    # This is only true for training and validation sets, not for the final test set. 
     if not metrics_only_for_saving:
         if not test:
             wandb.log({f"validation/{k}": v for k, v in metrics_dict.items()})

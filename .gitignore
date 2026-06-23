@@ -171,6 +171,7 @@ multirun/
 
 
 ### I added
+datasets/synthetic_res_scbm_old/*
 datasets/CUB/*
 datasets/synthetic_res_scbm/*
 scbm_implementation_venv/
