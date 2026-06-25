@@ -31,3 +31,6 @@ max_interventions: 200 # I added
 
 # Regression task
 regression_task: False # Whether the task is regression or classification. If True, the model
+
+# Multilabel task
+multilabel_task: False # Whether the task is multilabel classification or not. If True, the model will use a sigmoid activation for the output layer and binary cross-entropy loss. If False, the model will use a softmax activation for the output layer and cross-entropy loss.

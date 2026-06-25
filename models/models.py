@@ -437,8 +437,9 @@ class SCBM_residual(nn.Module):
         self.temp_decay_rate = (math.log(self.final_temp) - math.log(self.init_temp)) / float(self.num_epochs)
         
         
-        # Regression model
+        # Regression or multilabel model
         self.regression_task = config_model.regression_task
+        self.multilabel_task = config_model.multilabel_task
 
         # Architectures
         # Encoder h(.)
@@ -693,6 +694,13 @@ class SCBM_residual(nn.Module):
             # Regression: average predictions
             y_pred_logits = y_logits_flat.view(B, M, self.pred_dim).mean(dim=1)  # [B, 1]
             return y_pred_logits
+        
+        if self.multilabel_task:
+            # Multilabel: average sigmoid probs independently per task, then back to logits
+            # y_logits_flat: [B*M, K+J]
+            y_probs = torch.sigmoid(y_logits_flat).view(B, M, self.pred_dim).mean(dim=1)  # [B, K+J]
+            y_pred_logits = torch.logit(y_probs, eps=1e-6)                                # [B, K+J]
+            return y_pred_logits
 
         if self.pred_dim == 1:
             # Binary: average Bernoulli probs then convert back to logits
@@ -723,7 +731,7 @@ class SCBM_residual(nn.Module):
             if self.regression_task:
                 y_pred_probs_i += y_pred_logits_i
             else:
-                if self.pred_dim == 1:
+                if self.multilabel_task or self.pred_dim == 1:
                     y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
                 else:
                     y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
@@ -734,7 +742,7 @@ class SCBM_residual(nn.Module):
         if self.regression_task:
             return y_pred_probs
         
-        if self.pred_dim == 1:
+        if self.multilabel_task or self.pred_dim == 1:
             y_pred_logits = torch.logit(y_pred_probs, eps=1e-6)
         else:
             # log(1/M * sum_i p_i)
@@ -760,7 +768,7 @@ class SCBM_residual(nn.Module):
                 y_pred_probs_i += y_pred_logits_i
             else:
                 
-                if self.pred_dim == 1:
+                if self.multilabel_task or self.pred_dim == 1:
                     y_pred_probs_i += torch.sigmoid(y_pred_logits_i)
                 else:
                     y_pred_probs_i += torch.softmax(y_pred_logits_i, dim=1)
@@ -771,7 +779,7 @@ class SCBM_residual(nn.Module):
             return y_pred_probs
         
         
-        if self.pred_dim == 1:
+        if self.multilabel_task or self.pred_dim == 1:
             y_pred_logits = torch.logit(y_pred_probs, eps=1e-6)
         else:
             y_pred_logits = torch.log(y_pred_probs + 1e-6)
@@ -795,6 +803,11 @@ class SCBM_residual(nn.Module):
         if self.regression_task:
             y_pred_logits = y_logits_flat.view(B, M, self.pred_dim).mean(dim=1)  # [B, 1]
             return y_pred_logits
+        
+        if self.multilabel_task:
+            # Average sigmoid probs independently per task, then back to logits
+            y_probs = torch.sigmoid(y_logits_flat).view(B, M, self.pred_dim).mean(dim=1)  # (B, K+J)
+            return torch.logit(y_probs, eps=1e-6)
 
         if self.pred_dim == 1:
             y_probs = torch.sigmoid(y_logits_flat).view(B, M, 1).mean(dim=1)

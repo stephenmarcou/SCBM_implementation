@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from datasets.multiclass_synthetic_dataset import get_multiclass_datasets, save_multiclass_data
+from datasets.multilabel_synthetic_dataset import get_multilabel_datasets, load_saved_multilabel_data, save_multilabel_data
 from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import get_CUB_dataloaders
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
@@ -81,7 +82,23 @@ def get_data(config_base, config, gen, log_file=None):
             )
             if config.save_data:
                 save_multiclass_data(config_base, trainset, validset, testset, log_file=log_file)
-            
+                
+    elif config.dataset == "multilabel_synthetic":
+        print("MULTILABEL SYNTHETIC DATASET")
+        if config.data_dir_name is not None:
+            print(f"Loading synthetic dataset from {config.data_dir_name}")
+            with open(log_file, "a") as f:
+                f.write(f"Loading existing synthetic dataset from {config.data_dir_name}\n")
+            trainset, validset, testset = load_saved_multilabel_data(config_base)
+        else:   
+            trainset, validset, testset = get_multilabel_datasets(
+                config_base,
+                seed=config_base.seed,
+                log_file=log_file
+            )
+            if config.save_data:
+                save_multilabel_data(config_base, trainset, validset, testset, log_file=log_file)
+
 
 
         

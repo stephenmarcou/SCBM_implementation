@@ -505,7 +505,7 @@ def save_multiclass_data(config, train, val, test, log_file):
     log_file : path to the training log file; save path is appended to it
     seed     : random seed used to generate the dataset
     """
-    root = os.path.join(config.data.data_path, "synthetic_multiclass")
+    root = os.path.join(config.data.data_path, config.data.dataset)
     os.makedirs(root, exist_ok=True)
  
     # Build a human-readable name encoding the key hyperparameters
@@ -643,7 +643,7 @@ def load_saved_multiclass_data(config):
     
     
     
-    data_dir_root = os.path.join(config.data.data_path, "synthetic_multiclass")
+    data_dir_root = os.path.join(config.data.data_path, config.data.dataset)
     full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
     
     

@@ -272,6 +272,7 @@ class SCBresLoss(nn.Module):
         self.concept_learning = config.concept_learning
         
         self.regression_task = config.regression_task
+        self.multilabel_task = config.multilabel_task
 
         self.log_num_mc = math.log(config.num_monte_carlo)
         self.alpha = alpha if config.training_mode == "joint" else 1.0
@@ -307,6 +308,14 @@ class SCBresLoss(nn.Module):
             target_pred = target_pred_logits.squeeze(-1)
             target_true = target_true.float().view_as(target_pred)
             target_loss = F.mse_loss(target_pred, target_true, reduction="mean")
+            
+        # target_pred_logits: (B, K+J),  target_true: (B, K+J) float32
+        elif self.multilabel_task:
+            target_loss = F.binary_cross_entropy_with_logits(
+                target_pred_logits,          # (B, num_tasks)
+                target_true.float(),         # (B, num_tasks)
+                reduction="mean",
+            )
 
 
         elif self.num_classes == 2:
@@ -396,35 +405,43 @@ class SCBresLoss(nn.Module):
             )
 
         # Have to check this when concept learning is not hard!
-        else:
-            # compute_y_pred_logits will use the second argument: c_res_mcmc_logits
+        # Maybe delete this because it is never used
+        # else:
+        #     # compute_y_pred_logits will use the second argument: c_res_mcmc_logits
 
-            # Convert binary c_true into finite logits
-            eps = 1e-4
-            c_true_logits = torch.logit(
-                c_true_mcmc.clamp(min=eps, max=1.0 - eps)
-            )
+        #     # Convert binary c_true into finite logits
+        #     eps = 1e-4
+        #     c_true_logits = torch.logit(
+        #         c_true_mcmc.clamp(min=eps, max=1.0 - eps)
+        #     )
 
-            # Keep residual logits unchanged so gradients flow through residual path
-            z_logits = c_res_mcmc_logits[:, C:, :]
+        #     # Keep residual logits unchanged so gradients flow through residual path
+        #     z_logits = c_res_mcmc_logits[:, C:, :]
 
-            # Replace known concept logits with ground-truth concept logits
-            c_res_intervened_logits = torch.cat(
-                [c_true_logits, z_logits],
-                dim=1,
-            )
+        #     # Replace known concept logits with ground-truth concept logits
+        #     c_res_intervened_logits = torch.cat(
+        #         [c_true_logits, z_logits],
+        #         dim=1,
+        #     )
 
-            # Probs are ignored in soft/logit mode, but pass original tensor
-            y_int_logits = model.compute_y_pred_logits(
-                c_res_mcmc,
-                c_res_intervened_logits,
-            )
+        #     # Probs are ignored in soft/logit mode, but pass original tensor
+        #     y_int_logits = model.compute_y_pred_logits(
+        #         c_res_mcmc,
+        #         c_res_intervened_logits,
+        #     )
 
 
         if self.regression_task:
             y_true = y_true.float().view_as(y_int_logits)
             return F.mse_loss(y_int_logits, y_true)
 
+        # target_pred_logits: (B, K+J),  target_true: (B, K+J) float32
+        elif self.multilabel_task:
+            return F.binary_cross_entropy_with_logits(
+                y_int_logits,          # (B, num_tasks)
+                y_true.float(),         # (B, num_tasks)
+                reduction="mean",
+            )
 
 
 
@@ -509,6 +526,19 @@ class SCBresLoss(nn.Module):
                 target_true,
                 reduction="mean",
             )
+            
+            
+        # target_pred_logits: (B, K+J),  target_true: (B, K+J) float32
+        elif self.multilabel_task:
+            L_int_extension_loss = F.binary_cross_entropy_with_logits(
+                target_pred_logits,          # (B, num_tasks)
+                target_true.float(),         # (B, num_tasks)
+                reduction="mean",
+            )   
+
+            
+            
+        
         elif self.num_classes == 2:
             target_true = target_true.float().view(-1, 1)
             L_int_extension_loss = F.binary_cross_entropy_with_logits(

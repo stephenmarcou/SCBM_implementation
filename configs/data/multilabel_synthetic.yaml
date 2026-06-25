@@ -1,0 +1,102 @@
+# --------------------------
+#         Dataset
+# --------------------------
+
+defaults:
+  - data_defaults # Inherit data_defaults arguments
+dataset: 'multilabel_synthetic' # Name of the dataset
+save_data: false # Whether to save the generated dataset to disk
+save_residual_channel: false
+save_concept_and_residual_channel: false # Whether to save the predicted concepts and residuals for each data point
+
+# --------------------------
+# Multi-label task structure
+# --------------------------
+
+# Number of hidden-concept subtasks (K).
+# Each subtask uses one hidden concept as its primary signal, forcing the
+# residual channel to encode K orthogonal directions.
+# Must be <= floor(task_sparsity_hid * hid_dim).
+# Example: task_sparsity_hid=0.25, hid_dim=20 -> max num_hid_tasks=5.
+num_hid_tasks: 3
+
+# Number of observed-concept subtasks (J).
+# Keeps the concept encoder task-relevant. Usually 1 is sufficient.
+# Must be <= floor(task_sparsity_obs * obs_dim).
+num_obs_tasks: 1
+
+# --------------------------
+# Score mixing coefficients
+# --------------------------
+
+# alpha: weight of the shared observed-concept signal in each hidden subtask score.
+#   0.0 -> subtask depends only on one hidden concept (cleanest recovery, lower rank)
+#   1.0 -> subtask mixes both channels (more realistic, harder)
+alpha: 1.0
+
+# beta: weight of the per-hidden-concept signal in each hidden subtask score.
+#   Higher beta -> each hidden concept is more individually decisive.
+beta: 1.0
+
+# --------------------------
+# Concept dependency structure
+# --------------------------
+
+task_sparsity_obs: 0.3 # Fraction of observed concepts with nonzero task weight
+task_sparsity_hid: 0.25 # Fraction of hidden concepts with nonzero task weight
+                         # With hid_dim=20 this gives 5 active hidden concepts,
+                         # so num_hid_tasks <= 5.
+
+rho_cr: 0.0 # Cross-block correlation between observed and hidden concepts.
+             # 0 = no correlation (recommended: keeps hidden concept directions orthogonal
+             # to observed concepts, making recovery cleaner to interpret)
+rho_cc: 0.0 # Within-block correlation for observed concepts.
+             # 0 = independent observed concepts
+rho_rr: 0.0 # Within-block correlation for hidden concepts.
+             # 0 = independent hidden concepts (recommended: prevents the residual
+             # from collapsing multiple hidden concepts onto shared directions)
+
+# --------------------------
+# Input generation
+# --------------------------
+
+sigma_x: 0.01        # Noise std added to x. Low value -> hidden concept information
+                     # is recoverable from x; increase to make recovery harder.
+latent_rank: 0       # Rank of the low-rank covariance component.
+                     # 0 = identity covariance (independent concepts, cleanest setting).
+                     # >0 = low-rank shared structure across concepts.
+num_covariates: 100  # Dimensionality of the observed input x.
+
+# --------------------------
+# Dataset size and split
+# --------------------------
+
+n_samples: 50000    # Total samples before splitting
+train_ratio: 0.6    # 60% train
+val_ratio: 0.2      # 20% val, 20% test
+
+# --------------------------
+# Concept / residual dims
+# --------------------------
+
+obs_dim: 10   # Number of observed (supervised) concepts
+hid_dim: 20   # Number of hidden (unsupervised) concepts.
+              # Keep hid_dim > num_hid_tasks to leave slack in the residual
+              # channel; the SVD effective rank should emerge as ~num_hid_tasks
+              # rather than filling all hid_dim dimensions.
+
+# Model parameters (derived from dataset, set automatically by check_multilabel_dataset)
+num_concepts: 10   # Same as obs_dim; number of supervised concept heads in the model
+num_residuals: 20  # Same as hid_dim; number of residual dimensions in the model
+num_classes: 4       # Automatically set to num_hid_tasks + num_obs_tasks = K + J.
+                   # Used to size the multi-label output head. Overridden at runtime
+                   # by check_multilabel_dataset if data_dir_name is set.
+
+# --------------------------
+# Data directory
+# --------------------------
+
+# Set to null to generate data on the fly.
+# Set to a directory name (relative to data_path/multilabel_synthetic/) to
+# load a previously saved dataset instead.
+data_dir_name: null

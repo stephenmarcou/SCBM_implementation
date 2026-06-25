@@ -16,6 +16,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
 
+from datasets.multilabel_synthetic_dataset import check_multilabel_dataset
 from models.losses import create_loss
 from models.models import create_model
 
@@ -54,28 +55,19 @@ def maybe_save_best_model(
     epochs_without_improvement,
     log_file,
 ):
-    """
-    Save model if validation metric improves.
-
-    For classification:
-        maximise y_accuracy
-
-    For regression:
-        minimise y_rmse
-
-    Returns:
-        best_val_metric, epochs_without_improvement, should_stop
-    """
     patience = config.model.early_stopping_patience
 
     if config.model.regression_task:
         metric_name = "y_rmse"
         metric_mode = "min"
-        y_val_metric = float(metrics_dict[metric_name])
+    elif config.model.multilabel_task:
+        metric_name = "y_macro_auroc"
+        metric_mode = "max"
     else:
         metric_name = "y_accuracy"
         metric_mode = "max"
-        y_val_metric = float(metrics_dict[metric_name])
+
+    y_val_metric = float(metrics_dict[metric_name])
 
     if metric_mode == "min":
         improved = y_val_metric < best_val_metric
@@ -104,14 +96,81 @@ def maybe_save_best_model(
             f"Early stopping triggered: no improvement for {patience} epochs. "
             f"Best val {metric_name}: {best_val_metric:.4f}"
         )
-
         print(message, flush=True)
-
         if config.save_model:
             with open(log_file, "a") as f:
                 f.write(message + "\n")
 
     return best_val_metric, epochs_without_improvement, should_stop
+
+
+
+
+
+def create_experiment_path(config):
+    # Set paths
+    timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
+    ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
+    
+    
+    
+    if config.model.get("use_L_int_loss"):
+        ex_name = "L_int_loss_weight_" + str(config.model.L_int_loss_weight) + "_" + ex_name
+    if config.model.get("use_L_int_extension_loss"):
+        ex_name = "L_int_extension_loss_weight_" + str(config.model.L_int_extension_loss_weight) + "_" + ex_name
+
+
+    
+    if config.data.dataset == "CUB":    
+        if config.save_name is not None:
+            ex_name = config.save_name + "_" + ex_name
+        elif not config.save_name and config.incomplete and config.remove_attribute_groups:
+            ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
+        elif not config.save_name and config.incomplete and not config.remove_attribute_groups:
+            ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
+        else:
+            ex_name = "complete_" + ex_name
+    
+    elif config.data.dataset == "synthetic_res_scbm":
+        ex_name = config.save_name + "_" + ex_name
+        if config.model.regression_task:
+            ex_name = "regression_" + ex_name
+        ex_name =  f"alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr{config.data.rho_cr}_rho_cc{config.data.rho_cc}_rho_rr{config.data.rho_rr}_sigma_x_{config.data.sigma_x}_" + ex_name
+    
+    elif config.data.dataset == "multiclass_synthetic":
+        ex_name = config.save_name + "_" + ex_name
+        ex_name = f"hid_class_bits_{config.data.num_hid_class_bits}_obs_class_bits_{config.data.num_obs_class_bits}_num_classes_{config.data.num_classes}_sigma_x_{config.data.sigma_x}_" + ex_name
+        
+        
+    elif config.data.dataset == "multilabel_synthetic":
+        ex_name = config.save_name + "_" + ex_name
+        ex_name = f"hid_tasks_{config.data.num_hid_tasks}_obs_tasks_{config.data.num_obs_tasks}_alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr_{config.data.rho_cr}_rho_cc_{config.data.rho_cc}_rho_rr_{config.data.rho_rr}_sigma_x_{config.data.sigma_x}_" + ex_name
+        
+        
+    if config.hyperparameter_search:
+        config.experiment_dir = join(config.experiment_dir, "hyperparameter_search")
+    
+    if config.data.dataset != "synthetic_res_scbm":
+        experiment_path = (
+            Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
+        )
+    else:
+        experiment_path = (
+            Path(config.experiment_dir) / config.model.model / config.data.dataset / config.data.experiment_type / ex_name
+        )
+    
+    return experiment_path
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -154,49 +213,10 @@ def train(config):
     else:
         print("No GPU available")
 
-    # Set paths
-    timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
-    ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
     
-    if config.model.get("use_L_int_loss"):
-        ex_name = "L_int_loss_weight_" + str(config.model.L_int_loss_weight) + "_" + ex_name
-    if config.model.get("use_L_int_extension_loss"):
-        ex_name = "L_int_extension_loss_weight_" + str(config.model.L_int_extension_loss_weight) + "_" + ex_name
-
-
     
-    if config.data.dataset == "CUB":    
-        if config.save_name is not None:
-            ex_name = config.save_name + "_" + ex_name
-        elif not config.save_name and config.incomplete and config.remove_attribute_groups:
-            ex_name = "incomplete_" + str(config.num_attribute_groups_remove) + "_" + ex_name
-        elif not config.save_name and config.incomplete and not config.remove_attribute_groups:
-            ex_name = "incomplete_rmv_indiv_concepts_" + str(config.ratio_attributes_remove) + "_" + ex_name
-        else:
-            ex_name = "complete_" + ex_name
     
-    elif config.data.dataset == "synthetic_res_scbm":
-        ex_name = config.save_name + "_" + ex_name
-        if config.model.regression_task:
-            ex_name = "regression_" + ex_name
-        ex_name =  f"alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr{config.data.rho_cr}_rho_cc{config.data.rho_cc}_rho_rr{config.data.rho_rr}_sigma_x_{config.data.sigma_x}_" + ex_name
-    
-    elif config.data.dataset == "multiclass_synthetic":
-        ex_name = config.save_name + "_" + ex_name
-        ex_name = f"hid_class_bits_{config.data.num_hid_class_bits}_obs_class_bits_{config.data.num_obs_class_bits}_num_classes_{config.data.num_classes}_sigma_x_{config.data.sigma_x}_" + ex_name
-        
-    if config.hyperparameter_search:
-        config.experiment_dir = join(config.experiment_dir, "hyperparameter_search")
-    
-    if config.data.dataset != "synthetic_res_scbm":
-        experiment_path = (
-            Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
-        )
-    else:
-        experiment_path = (
-            Path(config.experiment_dir) / config.model.model / config.data.dataset / config.data.experiment_type / ex_name
-        )
-    
+    experiment_path = create_experiment_path(config)
  
     
     # I changed
@@ -281,7 +301,7 @@ def train(config):
     if config.model.regression_task:
         metrics = Custom_Regression_Metrics(config.data.num_concepts, device).to(device)
     else:
-        metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
+        metrics = Custom_Metrics(config.data.num_concepts, device, config).to(device)
     
     if config.model.regression_task:
         best_val_metric = float("inf")      # because lower y_rmse is better
@@ -648,6 +668,9 @@ def main(config: DictConfig):
     
     if config.data.dataset == "multiclass_synthetic":
         check_synthetic_multiclass_dataset(config)
+    
+    if config.data.dataset == "multilabel_synthetic":
+        check_multilabel_dataset(config)
         
     # if config.data.dataset == "synthetic_res_scbm":
     #     check_synthetic_res_scbm_data(config)

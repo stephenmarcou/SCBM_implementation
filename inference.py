@@ -125,7 +125,7 @@ def run(config):
     if config.model.regression_task:
         metrics = Custom_Regression_Metrics(config.data.num_concepts, device).to(device)
     else:
-        metrics = Custom_Metrics(config.data.num_concepts, device).to(device)
+        metrics = Custom_Metrics(config.data.num_concepts, device, config).to(device)
     loss_fn = create_loss(config)
     
     

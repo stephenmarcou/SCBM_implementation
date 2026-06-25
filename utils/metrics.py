@@ -40,19 +40,47 @@ def calc_target_metrics(ys, scores_pred, config, n_decimals=4, n_bins_cal=10):
     :param config:
     :return:
     """
+    # ----------------------------------------------------------------
+    # Multilabel: independent binary tasks, return early
+    # ys:          (n, K+J) float32
+    # scores_pred: (n, K+J) float32  — sigmoid probabilities
+    # ----------------------------------------------------------------
+    if config.model.multilabel_task:
+        per_task_auroc = roc_auc_score(ys, scores_pred, average=None)   # (K+J,)
+        per_task_ap    = average_precision_score(ys, scores_pred, average=None)  # (K+J,)
+        macro_auroc    = float(np.mean(per_task_auroc))
+        macro_ap       = float(np.mean(per_task_ap))
+
+        y_pred = (scores_pred > 0.5).astype(int)
+        hamming_acc = float(np.mean(ys == y_pred))
+        exact_match = float(np.mean(np.all(ys == y_pred, axis=1)))
+
+        result = {
+            "macro_auroc":      np.round(macro_auroc,  n_decimals),
+            "macro_ap":         np.round(macro_ap,     n_decimals),
+            "hamming_accuracy": np.round(hamming_acc,  n_decimals),
+            "exact_match":      np.round(exact_match,  n_decimals),
+        }
+        for k, (auc, ap) in enumerate(zip(per_task_auroc, per_task_ap)):
+            result[f"auroc_task_{k}"] = np.round(float(auc), n_decimals)
+            result[f"ap_task_{k}"]    = np.round(float(ap),  n_decimals)
+        return result
+    
+    
+    
     # AUROC
-    if config.num_classes == 2:
+    if config.data.num_classes == 2:
         auroc = roc_auc_score(ys, scores_pred)
-    elif config.num_classes > 2:
+    elif config.data.num_classes > 2:
         auroc = _roc_auc_score_with_missing(ys, scores_pred)
 
     # AUPR
     aupr = 0.0
-    if config.num_classes == 2:
+    if config.data.num_classes == 2:
         aupr = average_precision_score(ys, scores_pred)
-    elif config.num_classes > 2:
+    elif config.data.num_classes > 2:
         ap = AveragePrecision(
-            task="multiclass", num_classes=config.num_classes, average="weighted"
+            task="multiclass", num_classes=config.data.num_classes, average="weighted"
         )
         aupr = float(
             ap(torch.tensor(scores_pred), torch.tensor(ys.squeeze()).type(torch.int64))
@@ -61,13 +89,13 @@ def calc_target_metrics(ys, scores_pred, config, n_decimals=4, n_bins_cal=10):
         )
 
     # Brier score
-    if config.num_classes == 2:
+    if config.data.num_classes == 2:
         brier = brier_score(ys, np.squeeze(scores_pred))
     else:
         brier = brier_score(ys, scores_pred)
 
     # ECE
-    if config.num_classes == 2:
+    if config.data.num_classes == 2:
         ece_fct = CalibrationError(task="binary", n_bins=n_bins_cal, norm="l1")
         tl_ece_fct = CalibrationError(task="binary", n_bins=n_bins_cal, norm="l2")
         ece = float(
@@ -92,13 +120,13 @@ def calc_target_metrics(ys, scores_pred, config, n_decimals=4, n_bins_cal=10):
             task="multiclass",
             n_bins=n_bins_cal,
             norm="l1",
-            num_classes=config.num_classes,
+            num_classes=config.data.num_classes,
         )
         tl_ece_fct = CalibrationError(
             task="multiclass",
             n_bins=n_bins_cal,
             norm="l2",
-            num_classes=config.num_classes,
+            num_classes=config.data.num_classes,
         )
         ece = float(
             ece_fct(
@@ -178,7 +206,7 @@ def calc_concept_metrics(cs, concepts_pred_probs, config, n_decimals=4, n_bins_c
                 cs[:, j], concepts_pred_probs[j], average="macro", multi_class="ovr"
             )
 
-        # AUPR
+        # AUPR, THIS IS WRONG??
         aupr = 0.0
         if len(np.unique(cs[:, j])) == 2:
             aupr = average_precision_score(

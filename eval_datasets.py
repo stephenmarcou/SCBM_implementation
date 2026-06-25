@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import pickle
 from torchvision import datasets
 import torch.nn.functional as F
+from datasets.multiclass_synthetic_dataset import load_saved_multiclass_data
 from utils.utils import reset_random_seeds
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from datasets.CUB_dataset import get_CUB_dataloaders
@@ -174,6 +175,9 @@ def get_dataloaders(config, gen):
             train_data, val_data, test_data = load_saved_synthetic_data(config)
         else:
             train_data, val_data, test_data = get_synthetic_datasets_res_scbm(config)
+            
+    elif dataset == "multiclass_synthetic":
+        train_data, val_data, test_data = load_saved_multiclass_data(config)
         
         
     return train_data, val_data, test_data
@@ -197,28 +201,44 @@ def train(config):
     # Prepare logging and experiment directory
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
-    if config.data.dataset != "synthetic_res_scbm":
+    if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic":
         pkl_file_dir = config.data.pkl_file_dir.strip("/")  
         ex_name = pkl_file_dir + "_" + ex_name
 
-    
+    # Create experiment directory
     if config.data.dataset == "synthetic_res_scbm":
         if config.data.data_dir_name is not None:
             ex_name = config.data.data_dir_name + f"_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
         else:
             ex_name = f"a_{config.data.alpha}_b_{config.data.beta}_g_{config.data.gamma}_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
     
-    if config.data.dataset == "synthetic_res_scbm":
+        if config.data.experiment_type:
+            experiment_path = (
+                Path(config.experiment_dir) / config.model.model / config.data.dataset / config.data.experiment_type / ex_name
+            )
+        else:
+            experiment_path = (
+                Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
+            )
+
+        
+    
+    elif config.data.dataset == "multiclass_synthetic":
+        if config.data.data_dir_name is not None:
+            ex_name = config.data.data_dir_name + f"_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
+        
         experiment_path = (
-            Path(config.experiment_dir) / config.model.model / config.data.dataset / config.data.experiment_type /ex_name
+            Path(config.experiment_dir) / config.model.model / config.data.dataset /ex_name
         )
         
+    
+    
+    # CUB and CIFAR datasets
     else:
         experiment_path = (
             Path(config.experiment_dir) / config.model.model / config.data.dataset / ex_name
         )
         
-    
     
     experiment_path.mkdir(parents=True)
     config.experiment_dir = str(experiment_path)
@@ -272,7 +292,7 @@ def train(config):
     use_residuals_from_data = config.model.use_residuals_from_data 
     
     
-    if data_type == "synthetic_res_scbm":
+    if data_type == "synthetic_res_scbm" or data_type == "multiclass_synthetic":
         info_dict = {
             "model_type": model_type,
             "num_concepts": num_concepts,
@@ -297,8 +317,8 @@ def train(config):
     
     
 
-    if data_type == "synthetic_res_scbm":
-        open_synthetic_data_log_file_and_write_info(config, log_file, config.data.data_dir_name)
+    if data_type == "synthetic_res_scbm" or data_type == "multiclass_synthetic":
+        open_data_log_file_and_write_info(config, log_file, config.data.data_dir_name)
     
     
     # ---- Prepare model ----
@@ -334,11 +354,20 @@ def train(config):
     
     
     
-def open_synthetic_data_log_file_and_write_info(config, log_file, data_dir_name):
-    if config.data.experiment_type:
-        data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.experiment_type, data_dir_name)
-    else:
-        data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", data_dir_name)
+def open_data_log_file_and_write_info(config, log_file, data_dir_name):
+    if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic":
+        raise ValueError("Only synthetic datasets are supported for writing this info")
+    
+    if config.data.dataset == "synthetic_res_scbm":
+        if config.data.experiment_type:
+            data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", config.data.experiment_type, data_dir_name)
+        else:
+            data_dir_full_path = os.path.join(config.data.data_path, "synthetic_res_scbm", data_dir_name)
+            
+    elif config.data.dataset == "multiclass_synthetic":
+        data_dir_full_path = os.path.join(config.data.data_path, "multiclass_synthetic", data_dir_name)
+        
+        
     info_file = os.path.join(data_dir_full_path, "info.txt")
     with open(log_file, "a") as f:
         with open(info_file, "r") as info_f:

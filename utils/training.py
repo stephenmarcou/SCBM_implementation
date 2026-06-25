@@ -469,6 +469,8 @@ def validate_one_epoch_scbm_residual(
     
     c_res_mu_list = []
     
+    y_pred_list = []
+    
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
         strategy = config.model.inter_strategy #"emp_perc"
@@ -547,6 +549,8 @@ def validate_one_epoch_scbm_residual(
                 
                 concepts_residual_mean_list.append(concepts_residuals_sample_mean.cpu())
                 concepts_residual_std_list.append(concepts_residuals_sample_std.cpu())
+                
+                y_pred_list.append(target_pred_logits.cpu())
                 
                 
                 
@@ -637,6 +641,7 @@ def validate_one_epoch_scbm_residual(
         residual_probs_std_tensor = torch.cat(residual_prob_std_list, dim=0)
         res_mu_tensor = torch.cat(res_mu_list, dim=0)
 
+
         parent_dir_path = os.path.dirname(log_file)
         full_path = os.path.join(parent_dir_path, save_residual_meta_data_folder)
         Path(full_path).mkdir(parents=True, exist_ok=True)
@@ -666,6 +671,7 @@ def validate_one_epoch_scbm_residual(
         concepts_residuals_probs_mean_tensor = torch.cat(concepts_residual_probs_mean_list, dim=0)
         concepts_residuals_probs_std_tensor = torch.cat(concepts_residual_prob_std_list, dim=0)
         c_res_mu_tensor = torch.cat(c_res_mu_list, dim=0)
+        y_pred_tensor = torch.cat(y_pred_list, dim=0)
 
         parent_dir_path = os.path.dirname(log_file)
         full_path = os.path.join(parent_dir_path, save_residual_meta_data_folder)
@@ -679,18 +685,20 @@ def validate_one_epoch_scbm_residual(
         save_path_concepts_residual_probs_mean = os.path.join(full_path, "concepts_residuals_pred_probs_mean.pt")
         save_path_concepts_residual_probs_std = os.path.join(full_path, "concepts_residuals_pred_probs_std.pt")
         save_path_c_res_mu = os.path.join(full_path, "c_res_mu.pt")
-
+        save_path_y_pred = os.path.join(full_path, "y_pred.pt")
         torch.save(concepts_residuals_mean_tensor, save_path_concepts_residual_mean)
         torch.save(concepts_residuals_std_tensor, save_path_concepts_residual_std)
         torch.save(concepts_residuals_probs_mean_tensor, save_path_concepts_residual_probs_mean)
         torch.save(concepts_residuals_probs_std_tensor, save_path_concepts_residual_probs_std)
         torch.save(c_res_mu_tensor, save_path_c_res_mu)
+        torch.save(y_pred_tensor, save_path_y_pred)
 
         print(f"Saved concepts residuals means to {save_path_concepts_residual_mean}")
         print(f"Saved concepts residuals stds to {save_path_concepts_residual_std}")
         print(f"Saved concepts residuals predicted probabilities means to {save_path_concepts_residual_probs_mean}")
         print(f"Saved concepts residuals predicted probabilities stds to {save_path_concepts_residual_probs_std}")
         print(f"Saved c_res_mu to {save_path_c_res_mu}")
+        print(f"Saved y_pred to {save_path_y_pred}")
     
     
     
@@ -1001,9 +1009,10 @@ class Custom_Metrics(Metric):
         prec_loss (torch.Tensor): The accumulated precision loss.
     """
 
-    def __init__(self, n_concepts, device):
+    def __init__(self, n_concepts, device, config):
         super().__init__()
         self.n_concepts = n_concepts
+        self.config = config
         self.add_state("target_loss", default=torch.tensor(0.0, device=device))
         self.add_state("concepts_loss", default=torch.tensor(0.0, device=device))
         self.add_state("total_loss", default=torch.tensor(0.0, device=device))
@@ -1022,6 +1031,7 @@ class Custom_Metrics(Metric):
         self.add_state("prec_loss", default=torch.tensor(0.0, device=device))
         self.add_state("l_int_loss", default=torch.tensor(0.0, device=device))
         self.add_state("l_int_extension_loss", default=torch.tensor(0.0, device=device))
+
 
 
     def update(
@@ -1067,19 +1077,43 @@ class Custom_Metrics(Metric):
         y_pred_logits = torch.cat(self.y_pred_logits, dim=0).cpu()
         # c_pred_probs = c_pred_probs.numpy()
         c_pred = c_pred_probs > 0.5
-        if y_pred_logits.size(1) == 1:
+        
+        
+        if self.config.model.multilabel_task:
+            # Here y_pred_logits are actual logits
+            y_pred_probs = torch.sigmoid(y_pred_logits)   # (n, K+J) independent per task
+            y_pred = (y_pred_probs > 0.5).float()
+            
+        elif y_pred_logits.size(1) == 1:
             y_pred_probs = nn.Sigmoid()(y_pred_logits.squeeze())
             y_pred = y_pred_probs > 0.5
+            
         else:
+            # dim=1 to normalize across classes for multi-class classification for each sample
+            # Even with log_probabilities, we can use softmax to get probabilities for each class, check one note
             y_pred_probs = nn.Softmax(dim=1)(y_pred_logits)
             y_pred = y_pred_logits.argmax(dim=-1)
 
-        target_acc = (y_true == y_pred).sum() / self.n_samples
+
+
+
+        if self.config.model.multilabel_task:
+            # Hamming: fraction of correct (sample, task) pairs
+            target_acc = (y_true == y_pred).sum() / (self.n_samples * y_true.size(1))
+            target_acc_key = "y_hamming_accuracy"
+            # Samples-averaged Jaccard across tasks
+            target_jaccard = jaccard_score(y_true.numpy(), y_pred.numpy(), average="samples")
+        else:
+            target_acc = (y_true == y_pred).sum() / self.n_samples
+            target_acc_key = "y_accuracy"
+            target_jaccard = jaccard_score(y_true, y_pred, average="micro")
+            
+        #target_acc = (y_true == y_pred).sum() / self.n_samples
         concept_acc = (c_true == c_pred).sum() / (self.n_samples * self.n_concepts)
         complete_concept_acc = (
             (c_true == c_pred).sum(1) == self.n_concepts
         ).sum() / self.n_samples
-        target_jaccard = jaccard_score(y_true, y_pred, average="micro")
+        #target_jaccard = jaccard_score(y_true, y_pred, average="micro")
         concept_jaccard = jaccard_score(c_true, c_pred, average="micro")
         if self.l_int_extension_loss != 0:
             metrics = dict(
@@ -1088,7 +1122,7 @@ class Custom_Metrics(Metric):
                     "concepts_loss": self.concepts_loss / self.n_samples,
                     "l_int_extension_loss": self.l_int_extension_loss / self.n_samples,
                     "total_loss": self.total_loss / self.n_samples,
-                    "y_accuracy": target_acc,
+                    target_acc_key: target_acc,
                     "c_accuracy": concept_acc,
                     "complete_c_accuracy": complete_concept_acc,
                     "target_jaccard": target_jaccard,
@@ -1102,7 +1136,7 @@ class Custom_Metrics(Metric):
                     "concepts_loss": self.concepts_loss / self.n_samples,
                     "l_int_loss": self.l_int_loss / self.n_samples,
                     "total_loss": self.total_loss / self.n_samples,
-                    "y_accuracy": target_acc,
+                    target_acc_key: target_acc,
                     "c_accuracy": concept_acc,
                     "complete_c_accuracy": complete_concept_acc,
                     "target_jaccard": target_jaccard,
@@ -1116,7 +1150,7 @@ class Custom_Metrics(Metric):
                     "prec_loss": self.prec_loss / self.n_samples,
                     "concepts_loss": self.concepts_loss / self.n_samples,
                     "total_loss": self.total_loss / self.n_samples,
-                    "y_accuracy": target_acc,
+                    target_acc_key: target_acc,
                     "c_accuracy": concept_acc,
                     "complete_c_accuracy": complete_concept_acc,
                     "target_jaccard": target_jaccard,
@@ -1140,7 +1174,7 @@ class Custom_Metrics(Metric):
                 )
 
             y_metrics = calc_target_metrics(
-                y_true.numpy(), y_pred_probs.numpy(), config.data
+                y_true.numpy(), y_pred_probs.numpy(), config
             )
             c_metrics, _ = calc_concept_metrics(
                 c_true.numpy(), c_pred_probs_list, config.data
