@@ -52,6 +52,7 @@ def calc_target_metrics(ys, scores_pred, config, n_decimals=4, n_bins_cal=10):
         macro_ap       = float(np.mean(per_task_ap))
 
         y_pred = (scores_pred > 0.5).astype(int)
+        per_task_acc = np.mean(ys == y_pred, axis=0)  # (K+J,)
         hamming_acc = float(np.mean(ys == y_pred))
         exact_match = float(np.mean(np.all(ys == y_pred, axis=1)))
 
@@ -62,6 +63,7 @@ def calc_target_metrics(ys, scores_pred, config, n_decimals=4, n_bins_cal=10):
             "exact_match":      np.round(exact_match,  n_decimals),
         }
         for k, (auc, ap) in enumerate(zip(per_task_auroc, per_task_ap)):
+            result[f"accuracy_task_{k}"] = np.round(float(per_task_acc[k]), n_decimals)
             result[f"auroc_task_{k}"] = np.round(float(auc), n_decimals)
             result[f"ap_task_{k}"]    = np.round(float(ap),  n_decimals)
         return result
