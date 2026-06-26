@@ -144,7 +144,7 @@ def create_experiment_path(config):
         
     elif config.data.dataset == "multilabel_synthetic":
         ex_name = config.save_name + "_" + ex_name
-        ex_name = f"hid_tasks_{config.data.num_hid_tasks}_obs_tasks_{config.data.num_obs_tasks}_alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr_{config.data.rho_cr}_rho_cc_{config.data.rho_cc}_rho_rr_{config.data.rho_rr}_sigma_x_{config.data.sigma_x}_" + ex_name
+        ex_name = f"hid_tasks_{config.data.num_hid_tasks}_obs_tasks_{config.data.num_obs_tasks}_alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr_{config.data.rho_cr}_rho_cc_{config.data.rho_cc}_rho_rr_{config.data.rho_rr}_w_ratio_{config.data.min_weight_ratio}_sigma_x_{config.data.sigma_x}_" + ex_name
         
         
     if config.hyperparameter_search:

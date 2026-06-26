@@ -14,7 +14,7 @@ This dataset replaces the single multiclass integer with K independent binary
 subtasks. Each subtask k is a noisy threshold of a continuous hidden score:
 
     s_hid_k = alpha * (concept_signal @ w_obs) + beta * residual_signal[:, hid_task_idx[k]]
-    y_k     = 1[s_hid_k >= median(s_hid_k)]
+    y_k = 1[s_hid_k >= median(s_hid_k)]
 
 This is more realistic because:
   - Each subtask depends on one hidden concept *and* the full observed concept
@@ -33,17 +33,17 @@ Data-generating process
 -----------------------
     eta = [eta_obs, eta_hid] ~ N(0, Sigma)
 
-    c_obs           = 1[eta_obs >= 0]             (observed, supervised)
-    c_hid           = 1[eta_hid >= 0]             (hidden, not supervised)
-    concept_signal  = |eta_obs| * c_obs
+    c_obs = 1[eta_obs >= 0]  (observed, supervised)
+    c_hid = 1[eta_hid >= 0]  (hidden, not supervised)
+    concept_signal = |eta_obs| * c_obs
     residual_signal = |eta_hid| * c_hid
 
     x = MLP(concept_signal, residual_signal) + noise
 
-    w_obs, w_hid    = sparse task weight vectors (unit norm)
+    w_obs, w_hid = sparse task weight vectors (unit norm)
 
-    hid_task_idx    = top-K hidden concept indices by |w_hid|
-    obs_task_idx    = top-J observed concept indices by |w_obs|
+    hid_task_idx = top-K hidden concept indices by |w_hid|
+    obs_task_idx = top-J observed concept indices by |w_obs|
 
     For each hidden subtask k in 0..K-1:
         s_hid_k = alpha * (concept_signal @ w_obs)
@@ -160,6 +160,7 @@ class MultilabelSyntheticResidualDataset(Dataset):
         task_sparsity_obs,
         task_sparsity_hid,
         num_hid_tasks,
+        min_weight_ratio=0.4,
         num_obs_tasks=1,
         alpha=1.0,
         beta=1.0,
@@ -175,23 +176,24 @@ class MultilabelSyntheticResidualDataset(Dataset):
         assert num_obs_tasks >= 1, "num_obs_tasks must be >= 1"
         assert alpha >= 0 and beta >= 0, "alpha and beta must be non-negative"
 
-        self.n_samples        = n_samples
-        self.num_covariates   = num_covariates
-        self.obs_dim          = obs_dim
-        self.hid_dim          = hid_dim
-        self.latent_rank      = latent_rank
-        self.sigma_x          = sigma_x
+        self.n_samples = n_samples
+        self.num_covariates = num_covariates
+        self.obs_dim = obs_dim
+        self.hid_dim = hid_dim
+        self.latent_rank = latent_rank
+        self.sigma_x = sigma_x
         self.task_sparsity_obs = task_sparsity_obs
         self.task_sparsity_hid = task_sparsity_hid
-        self.num_hid_tasks    = num_hid_tasks
-        self.num_obs_tasks    = num_obs_tasks
-        self.num_classes        = num_hid_tasks + num_obs_tasks
-        self.alpha            = alpha
-        self.beta             = beta
-        self.rho_cc           = rho_cc
-        self.rho_rr           = rho_rr
-        self.rho_cr           = rho_cr
-        self.seed             = seed
+        self.num_hid_tasks = num_hid_tasks
+        self.num_obs_tasks = num_obs_tasks
+        self.num_classes = num_hid_tasks + num_obs_tasks
+        self.alpha = alpha
+        self.beta = beta
+        self.rho_cc = rho_cc
+        self.rho_rr = rho_rr
+        self.rho_cr = rho_cr
+        self.seed = seed
+        self.min_weight_ratio = min_weight_ratio
 
         rng = np.random.default_rng(seed)
 
@@ -217,13 +219,13 @@ class MultilabelSyntheticResidualDataset(Dataset):
             size=n_samples,
         )
 
-        eta_concepts  = eta[:, :obs_dim]
+        eta_concepts = eta[:, :obs_dim]
         eta_residuals = eta[:, obs_dim:]
 
-        concepts  = (eta_concepts  >= 0).astype(np.float32)
+        concepts = (eta_concepts >= 0).astype(np.float32)
         residuals = (eta_residuals >= 0).astype(np.float32)
 
-        concept_signal  = np.abs(eta_concepts)  * concepts   # (n, obs_dim)
+        concept_signal = np.abs(eta_concepts) * concepts  # (n, obs_dim)
         residual_signal = np.abs(eta_residuals) * residuals  # (n, hid_dim)
 
         # ----------------------------------------------------------------
@@ -235,8 +237,18 @@ class MultilabelSyntheticResidualDataset(Dataset):
         # ----------------------------------------------------------------
         # 4. Sparse task weights
         # ----------------------------------------------------------------
-        w_obs = _make_sparse_weights(obs_dim, task_sparsity_obs, rng)
-        w_hid = _make_sparse_weights(hid_dim, task_sparsity_hid, rng)
+        w_obs = _make_sparse_weights(
+            obs_dim,
+            task_sparsity_obs,
+            rng,
+            min_weight_ratio=self.min_weight_ratio,
+        )
+        w_hid = _make_sparse_weights(
+            hid_dim,
+            task_sparsity_hid,
+            rng,
+            min_weight_ratio=self.min_weight_ratio,
+        )
 
         # Validate enough active concepts exist for the requested tasks
         n_active_hid = max(1, int(task_sparsity_hid * hid_dim))
@@ -275,7 +287,7 @@ class MultilabelSyntheticResidualDataset(Dataset):
         # ----------------------------------------------------------------
 
         # Shared terms (computed once)
-        shared_obs_score = concept_signal @ w_obs   # (n,)  alpha term for hid subtasks
+        shared_obs_score = concept_signal @ w_obs  # (n,)  alpha term for hid subtasks
         shared_hid_score = residual_signal @ w_hid  # (n,)  beta term for obs subtasks
 
         s_hid = np.zeros((n_samples, num_hid_tasks), dtype=np.float32)
@@ -300,46 +312,46 @@ class MultilabelSyntheticResidualDataset(Dataset):
         # ----------------------------------------------------------------
         # 6. Store as tensors
         # ----------------------------------------------------------------
-        self.x               = torch.tensor(x,               dtype=torch.float32)
-        self.concepts        = torch.tensor(concepts,        dtype=torch.float32)
-        self.residuals       = torch.tensor(residuals,       dtype=torch.float32)
-        self.y               = torch.tensor(y,               dtype=torch.float32)
-        self.eta_concepts    = torch.tensor(eta_concepts,    dtype=torch.float32)
-        self.eta_residuals   = torch.tensor(eta_residuals,   dtype=torch.float32)
-        self.concept_signal  = torch.tensor(concept_signal,  dtype=torch.float32)
+        self.x = torch.tensor(x, dtype=torch.float32)
+        self.concepts = torch.tensor(concepts, dtype=torch.float32)
+        self.residuals = torch.tensor(residuals, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
+        self.eta_concepts = torch.tensor(eta_concepts, dtype=torch.float32)
+        self.eta_residuals = torch.tensor(eta_residuals, dtype=torch.float32)
+        self.concept_signal = torch.tensor(concept_signal, dtype=torch.float32)
         self.residual_signal = torch.tensor(residual_signal, dtype=torch.float32)
-        self.s_hid           = torch.tensor(s_hid,           dtype=torch.float32)
-        self.s_obs           = torch.tensor(s_obs,           dtype=torch.float32)
-        self.w_obs           = torch.tensor(w_obs,           dtype=torch.float32)
-        self.w_hid           = torch.tensor(w_hid,           dtype=torch.float32)
-        self.Sigma           = torch.tensor(Sigma,           dtype=torch.float32)
-        self.hid_task_idx    = torch.tensor(hid_task_idx,    dtype=torch.long)
-        self.obs_task_idx    = torch.tensor(obs_task_idx,    dtype=torch.long)
+        self.s_hid = torch.tensor(s_hid, dtype=torch.float32)
+        self.s_obs = torch.tensor(s_obs, dtype=torch.float32)
+        self.w_obs = torch.tensor(w_obs, dtype=torch.float32)
+        self.w_hid = torch.tensor(w_hid, dtype=torch.float32)
+        self.Sigma = torch.tensor(Sigma, dtype=torch.float32)
+        self.hid_task_idx = torch.tensor(hid_task_idx, dtype=torch.long)
+        self.obs_task_idx = torch.tensor(obs_task_idx, dtype=torch.long)
 
         # ----------------------------------------------------------------
         # 7. Apply split indices
         # ----------------------------------------------------------------
         if indices is not None:
-            self.x               = self.x[indices]
-            self.concepts        = self.concepts[indices]
-            self.residuals       = self.residuals[indices]
-            self.y               = self.y[indices]
-            self.eta_concepts    = self.eta_concepts[indices]
-            self.eta_residuals   = self.eta_residuals[indices]
-            self.concept_signal  = self.concept_signal[indices]
+            self.x = self.x[indices]
+            self.concepts = self.concepts[indices]
+            self.residuals = self.residuals[indices]
+            self.y = self.y[indices]
+            self.eta_concepts = self.eta_concepts[indices]
+            self.eta_residuals = self.eta_residuals[indices]
+            self.concept_signal = self.concept_signal[indices]
             self.residual_signal = self.residual_signal[indices]
-            self.s_hid           = self.s_hid[indices]
-            self.s_obs           = self.s_obs[indices]
-            self.n_samples       = self.x.shape[0]
+            self.s_hid = self.s_hid[indices]
+            self.s_obs = self.s_obs[indices]
+            self.n_samples = self.x.shape[0]
 
     def __len__(self):
         return self.x.shape[0]
 
     def __getitem__(self, idx):
         return {
-            "features":  self.x[idx],
-            "concepts":  self.concepts[idx],
-            "labels":    self.y[idx],        # (K+J,) float32 multi-label vector
+            "features": self.x[idx],
+            "concepts": self.concepts[idx],
+            "labels": self.y[idx],  # (K+J,) float32 multi-label vector
             "residuals": self.residuals[idx],
         }
 
@@ -413,14 +425,30 @@ def _make_covariance(obs_dim, hid_dim, latent_rank, rho_cc, rho_rr, rho_cr, rng)
 
     return Sigma.astype(np.float32)
 
+# This version created weights that were too small
+# def _make_sparse_weights(dim, sparsity, rng):
+#     """Sparse task weight vector, normalised to unit norm."""
+#     w = np.zeros(dim, dtype=np.float32)
+#     n_active = max(1, int(sparsity * dim))
+#     active_idx = rng.choice(dim, size=n_active, replace=False)
+#     w[active_idx] = rng.normal(size=n_active).astype(np.float32)
+#     w /= np.linalg.norm(w) + 1e-8
+#     return w
 
-def _make_sparse_weights(dim, sparsity, rng):
-    """Sparse task weight vector, normalised to unit norm."""
+def _make_sparse_weights(dim, sparsity, rng, min_weight_ratio=0.4):
     w = np.zeros(dim, dtype=np.float32)
     n_active = max(1, int(sparsity * dim))
     active_idx = rng.choice(dim, size=n_active, replace=False)
-    w[active_idx] = rng.normal(size=n_active).astype(np.float32)
-    w /= np.linalg.norm(w) + 1e-8
+
+    # Sample raw magnitudes
+    magnitudes = rng.uniform(low=0.5, high=1.0, size=n_active)
+
+    # Enforce minimum ratio relative to the maximum
+    max_mag = magnitudes.max()
+    magnitudes = np.maximum(magnitudes, min_weight_ratio * max_mag)
+
+    signs = rng.choice([-1.0, 1.0], size=n_active)
+    w[active_idx] = (magnitudes * signs).astype(np.float32)
     return w
 
 
@@ -484,27 +512,27 @@ def get_multilabel_datasets(config, seed=0, log_file=None):
     print(f"Train: {len(idx_train)}, Val: {len(idx_val)}, Test: {len(idx_test)}")
 
     shared = dict(
-        n_samples        = config.data.n_samples,
-        num_covariates   = config.data.num_covariates,
-        obs_dim          = config.data.obs_dim,
-        hid_dim          = config.data.hid_dim,
-        latent_rank      = config.data.latent_rank,
-        sigma_x          = config.data.sigma_x,
-        task_sparsity_obs = config.data.task_sparsity_obs,
-        task_sparsity_hid = config.data.task_sparsity_hid,
-        num_hid_tasks    = config.data.num_hid_tasks,
-        num_obs_tasks    = config.data.num_obs_tasks,
-        alpha            = config.data.alpha,
-        beta             = config.data.beta,
-        rho_cc           = config.data.rho_cc,
-        rho_rr           = config.data.rho_rr,
-        rho_cr           = config.data.rho_cr,
-        seed             = seed,
+        n_samples=config.data.n_samples,
+        num_covariates=config.data.num_covariates,
+        obs_dim=config.data.obs_dim,
+        hid_dim=config.data.hid_dim,
+        latent_rank=config.data.latent_rank,
+        sigma_x=config.data.sigma_x,
+        task_sparsity_obs=config.data.task_sparsity_obs,
+        task_sparsity_hid=config.data.task_sparsity_hid,
+        num_hid_tasks=config.data.num_hid_tasks,
+        num_obs_tasks=config.data.num_obs_tasks,
+        alpha=config.data.alpha,
+        beta=config.data.beta,
+        rho_cc=config.data.rho_cc,
+        rho_rr=config.data.rho_rr,
+        rho_cr=config.data.rho_cr,
+        seed=seed,
     )
 
     train_ds = MultilabelSyntheticResidualDataset(indices=idx_train, **shared)
-    val_ds   = MultilabelSyntheticResidualDataset(indices=idx_val,   **shared)
-    test_ds  = MultilabelSyntheticResidualDataset(indices=idx_test,  **shared)
+    val_ds = MultilabelSyntheticResidualDataset(indices=idx_val, **shared)
+    test_ds = MultilabelSyntheticResidualDataset(indices=idx_test, **shared)
 
     if log_file is not None:
         with open(log_file, "a") as f:
@@ -517,12 +545,16 @@ def get_multilabel_datasets(config, seed=0, log_file=None):
             f.write(f"  num_classes       : {train_ds.num_classes}\n")
             f.write(f"  alpha / beta     : {shared['alpha']} / {shared['beta']}\n")
             f.write(f"  sigma_x          : {config.data.sigma_x}\n")
-            f.write(f"  rho_cc/rr/cr     : {shared['rho_cc']} / "
-                    f"{shared['rho_rr']} / {shared['rho_cr']}\n")
+            f.write(
+                f"  rho_cc/rr/cr     : {shared['rho_cc']} / "
+                f"{shared['rho_rr']} / {shared['rho_cr']}\n"
+            )
             f.write(f"  hid_task_idx     : {train_ds.hid_task_idx.tolist()}\n")
             f.write(f"  obs_task_idx     : {train_ds.obs_task_idx.tolist()}\n")
-            f.write(f"  train/val/test   : {len(train_ds)} / "
-                    f"{len(val_ds)} / {len(test_ds)}\n")
+            f.write(
+                f"  train/val/test   : {len(train_ds)} / "
+                f"{len(val_ds)} / {len(test_ds)}\n"
+            )
 
     return train_ds, val_ds, test_ds
 
@@ -569,6 +601,7 @@ def save_multilabel_data(config, train, val, test, log_file):
         + f"_sigmax_{train.sigma_x}"
         + f"_hid_dim_{train.hid_dim}"
         + f"_obs_dim_{train.obs_dim}"
+        + f"_w_ratio_{train.min_weight_ratio}"
         + f"_seed_{config.seed}"
     )
 
@@ -604,23 +637,24 @@ def save_multilabel_data(config, train, val, test, log_file):
     log_parent = os.path.dirname(log_file)
     with open(info_path, "w") as f:
         f.write("[multilabel synthetic dataset]\n")
-        f.write(f"num_hid_tasks      : {train.num_hid_tasks}\n")
-        f.write(f"num_obs_tasks      : {train.num_obs_tasks}\n")
-        f.write(f"num_tasks/num_classes        : {train.num_classes}\n")
-        f.write(f"alpha              : {train.alpha}\n")
-        f.write(f"beta               : {train.beta}\n")
-        f.write(f"hid_task_idx       : {train.hid_task_idx.tolist()}\n")
-        f.write(f"obs_task_idx       : {train.obs_task_idx.tolist()}\n")
-        f.write(f"rho_cr             : {train.rho_cr}\n")
-        f.write(f"rho_cc             : {train.rho_cc}\n")
-        f.write(f"rho_rr             : {train.rho_rr}\n")
-        f.write(f"task_sparsity_hid  : {train.task_sparsity_hid}\n")
-        f.write(f"task_sparsity_obs  : {train.task_sparsity_obs}\n")
-        f.write(f"sigma_x            : {train.sigma_x}\n")
-        f.write(f"hid_dim            : {train.hid_dim}\n")
-        f.write(f"obs_dim            : {train.obs_dim}\n")
-        f.write(f"seed               : {config.seed}\n")
+        f.write(f"num_hid_tasks : {train.num_hid_tasks}\n")
+        f.write(f"num_obs_tasks : {train.num_obs_tasks}\n")
+        f.write(f"num_tasks/num_classes : {train.num_classes}\n")
+        f.write(f"alpha : {train.alpha}\n")
+        f.write(f"beta : {train.beta}\n")
+        f.write(f"hid_task_idx : {train.hid_task_idx.tolist()}\n")
+        f.write(f"obs_task_idx : {train.obs_task_idx.tolist()}\n")
+        f.write(f"rho_cr : {train.rho_cr}\n")
+        f.write(f"rho_cc : {train.rho_cc}\n")
+        f.write(f"rho_rr : {train.rho_rr}\n")
+        f.write(f"task_sparsity_hid : {train.task_sparsity_hid}\n")
+        f.write(f"task_sparsity_obs : {train.task_sparsity_obs}\n")
+        f.write(f"sigma_x : {train.sigma_x}\n")
+        f.write(f"hid_dim : {train.hid_dim}\n")
+        f.write(f"obs_dim : {train.obs_dim}\n")
+        f.write(f"seed : {config.seed}\n")
         f.write(f"train / val / test : {len(train)} / {len(val)} / {len(test)}\n")
+        f.write(f"min_weight_ratio : {train.min_weight_ratio}\n")
         f.write(f"data created for model at: {log_parent}\n")
 
     with open(log_file, "a") as f:
@@ -640,34 +674,34 @@ class LoadedMultilabelDataset(Dataset):
         def _load(name):
             return torch.load(os.path.join(split_dir, f"{name}.pt"))
 
-        self.x               = _load("x")
-        self.concepts        = _load("concepts")
-        self.residuals       = _load("residuals")
-        self.y               = _load("y")
-        self.eta_concepts    = _load("eta_concepts")
-        self.eta_residuals   = _load("eta_residuals")
-        self.concept_signal  = _load("concept_signal")
+        self.x = _load("x")
+        self.concepts = _load("concepts")
+        self.residuals = _load("residuals")
+        self.y = _load("y")
+        self.eta_concepts = _load("eta_concepts")
+        self.eta_residuals = _load("eta_residuals")
+        self.concept_signal = _load("concept_signal")
         self.residual_signal = _load("residual_signal")
-        self.s_hid           = _load("s_hid")
-        self.s_obs           = _load("s_obs")
-        self.w_obs           = _load("w_obs")
-        self.w_hid           = _load("w_hid")
-        self.Sigma           = _load("Sigma")
-        self.hid_task_idx    = _load("hid_task_idx")
-        self.obs_task_idx    = _load("obs_task_idx")
-        self.n_samples       = self.x.shape[0]
-        self.num_classes       = self.y.shape[1]
-        self.num_hid_tasks   = self.hid_task_idx.shape[0]
-        self.num_obs_tasks   = self.obs_task_idx.shape[0]
+        self.s_hid = _load("s_hid")
+        self.s_obs = _load("s_obs")
+        self.w_obs = _load("w_obs")
+        self.w_hid = _load("w_hid")
+        self.Sigma = _load("Sigma")
+        self.hid_task_idx = _load("hid_task_idx")
+        self.obs_task_idx = _load("obs_task_idx")
+        self.n_samples = self.x.shape[0]
+        self.num_classes = self.y.shape[1]
+        self.num_hid_tasks = self.hid_task_idx.shape[0]
+        self.num_obs_tasks = self.obs_task_idx.shape[0]
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
         return {
-            "features":  self.x[idx],
-            "concepts":  self.concepts[idx],
-            "labels":    self.y[idx],
+            "features": self.x[idx],
+            "concepts": self.concepts[idx],
+            "labels": self.y[idx],
             "residuals": self.residuals[idx],
         }
 
@@ -689,8 +723,8 @@ def load_saved_multilabel_data(config):
     full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
 
     train = LoadedMultilabelDataset(os.path.join(full_data_dir_path, "train"))
-    val   = LoadedMultilabelDataset(os.path.join(full_data_dir_path, "val"))
-    test  = LoadedMultilabelDataset(os.path.join(full_data_dir_path, "test"))
+    val = LoadedMultilabelDataset(os.path.join(full_data_dir_path, "val"))
+    test = LoadedMultilabelDataset(os.path.join(full_data_dir_path, "test"))
     return train, val, test
 
 
@@ -711,4 +745,4 @@ def check_multilabel_dataset(config):
     else:
         train_data, _, _ = load_saved_multilabel_data(config)
         config.data.num_concepts = train_data.concepts.shape[1]
-        config.data.num_classes    = train_data.y.shape[1]
+        config.data.num_classes = train_data.y.shape[1]

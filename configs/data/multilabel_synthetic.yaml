@@ -67,6 +67,8 @@ latent_rank: 0       # Rank of the low-rank covariance component.
                      # >0 = low-rank shared structure across concepts.
 num_covariates: 100  # Dimensionality of the observed input x.
 
+min_weight_ratio: 0.4 # Minimum ratio of task weight magnitude relative to the maximum weight
+
 # --------------------------
 # Dataset size and split
 # --------------------------
