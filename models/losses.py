@@ -152,6 +152,7 @@ class SCBLoss(nn.Module):
         self.alpha = alpha if config.training_mode == "joint" else 1.0
         
         self.regression_task = config.regression_task
+        self.multilabel_task = config.multilabel_task
 
     def forward(
         self,
@@ -184,6 +185,14 @@ class SCBLoss(nn.Module):
             target_pred = target_pred_logits.squeeze(-1)
             target_true = target_true.float().view_as(target_pred)
             target_loss = F.mse_loss(target_pred, target_true, reduction="mean")
+            
+        # target_pred_logits: (B, K+J),  target_true: (B, K+J) float32
+        elif self.multilabel_task:
+            target_loss = F.binary_cross_entropy_with_logits(
+                target_pred_logits,          # (B, num_tasks)
+                target_true.float(),         # (B, num_tasks)
+                reduction="mean",
+            )
             
         elif self.num_classes == 2:
             # Logits to probs
