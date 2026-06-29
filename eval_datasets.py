@@ -12,6 +12,7 @@ import pickle
 from torchvision import datasets
 import torch.nn.functional as F
 from datasets.multiclass_synthetic_dataset import load_saved_multiclass_data
+from datasets.multilabel_synthetic_dataset import load_saved_multilabel_data
 from utils.utils import reset_random_seeds
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from datasets.CUB_dataset import get_CUB_dataloaders
@@ -81,10 +82,37 @@ def choose_predictor(model_type, num_concepts, num_classes):
     return head
 
 
+def get_predictions(outputs, class_label, dataset, num_classes):
+    """Returns (preds, probs, n_correct, n_total) for any task type."""
+    
+    if dataset == "multilabel_synthetic":
+        probs = torch.sigmoid(outputs)          # (B, K)
+        preds = (probs > 0.5).float()
+        n_correct = (preds == class_label).sum().item()
+        n_total = class_label.size(0) * class_label.size(1)  # n * K for Hamming
+        
+    elif num_classes == 2:
+        probs = torch.sigmoid(outputs.squeeze(1))  # (B,)
+        preds = (probs > 0.5).float()
+        n_correct = (preds == class_label.float()).sum().item()
+        n_total = class_label.size(0)
+        
+    else:
+        probs = torch.softmax(outputs, dim=1)   # (B, C)
+        preds = torch.argmax(outputs, dim=1)
+        n_correct = (preds == class_label).sum().item()
+        n_total = class_label.size(0)
+    
+    return preds, probs, n_correct, n_total
+
+
+
+
 def train_one_epoch(config, model, train_loader, optimizer, criterion, device):
     model.train()
-    total_loss = 0
+    total_loss = 0.0
     total_correct = 0
+    total_samples = 0  # tracks the correct denominator for each task type
     for batch in train_loader:
         #attribute_label, class_label = batch
         class_label = batch["labels"]
@@ -96,27 +124,41 @@ def train_one_epoch(config, model, train_loader, optimizer, criterion, device):
 
         optimizer.zero_grad()
         outputs = model(attribute_label)
-        predictions = torch.argmax(outputs, dim=1)
-        total_correct += (predictions == class_label).sum().item()
+        
+        
         loss = criterion(outputs, class_label)
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
 
-    avg_loss = total_loss / len(train_loader.dataset)
-    avg_accuracy = total_correct / len(train_loader.dataset)
-    return avg_loss, avg_accuracy
+        _, _, n_correct, n_total = get_predictions(
+            outputs.detach(), class_label, config.data.dataset, config.data.num_classes
+        )
+        total_correct += n_correct
+        total_samples += n_total  # N for binary/multiclass, N*K for multilabel
+
+    avg_loss = total_loss / len(train_loader)   # sum of losses / number of batches
+    avg_accuracy = total_correct / total_samples
+    return {"loss": avg_loss, "accuracy": avg_accuracy}
+
+
+
+
+
 
 def validate_one_epoch(config, model, val_loader, criterion, device):
     model.eval()
-    total_loss = 0
+    total_loss = 0.0
     total_correct = 0
+    total_samples = 0
+
+    all_probs = []   # for AUROC, multilabel only
+    all_labels = []
+
     with torch.no_grad():
         for batch in val_loader:
-            #attribute_label, class_label = batch
             attribute_label = batch["concepts"]
-            # assess synthetic dataset where we have access to hid_dim as well
             if config.model.use_residuals_from_data and "residuals" in batch:
                 residuals = batch["residuals"]
                 attribute_label = torch.cat([attribute_label, residuals], dim=1)
@@ -124,15 +166,44 @@ def validate_one_epoch(config, model, val_loader, criterion, device):
             attribute_label, class_label = attribute_label.to(device), class_label.to(device)
 
             outputs = model(attribute_label)
-            predictions = torch.argmax(outputs, dim=1)
-            total_correct += (predictions == class_label).sum().item()
-            
             loss = criterion(outputs, class_label)
             total_loss += loss.item()
 
-    avg_loss = total_loss / len(val_loader.dataset)
-    avg_accuracy = total_correct / len(val_loader.dataset)
-    return avg_loss, avg_accuracy
+            _, probs, n_correct, n_total = get_predictions(
+                outputs, class_label, config.data.dataset, config.data.num_classes
+            )
+            total_correct += n_correct
+            total_samples += n_total
+
+            if config.data.dataset == "multilabel_synthetic":
+                all_probs.append(probs.cpu())
+                all_labels.append(class_label.cpu())
+
+    avg_loss = total_loss / len(val_loader)
+    avg_accuracy = total_correct / total_samples
+    metrics = {"loss": avg_loss, "accuracy": avg_accuracy}
+
+    # For multilabel synthetic dataset, compute AUROC and exact match metrics
+    if config.data.dataset == "multilabel_synthetic":
+        from sklearn.metrics import roc_auc_score
+        all_probs = torch.cat(all_probs, dim=0).numpy()    # (N, K)
+        all_labels = torch.cat(all_labels, dim=0).numpy()  # (N, K)
+
+        try:
+            macro_auroc = roc_auc_score(all_labels, all_probs, average="macro")
+            per_task_auroc = roc_auc_score(all_labels, all_probs, average=None).tolist()
+        except ValueError:
+            macro_auroc = float("nan")
+            per_task_auroc = [float("nan")] * all_labels.shape[1]
+
+        exact_match = (
+            ((all_probs > 0.5) == all_labels).all(axis=1).mean()
+        )
+        metrics["macro_auroc"] = macro_auroc
+        metrics["per_task_auroc"] = per_task_auroc
+        metrics["exact_match"] = exact_match
+
+    return metrics
 
 
 
@@ -179,6 +250,8 @@ def get_dataloaders(config, gen):
     elif dataset == "multiclass_synthetic":
         train_data, val_data, test_data = load_saved_multiclass_data(config)
         
+    elif dataset == "multilabel_synthetic":
+        train_data, val_data, test_data = load_saved_multilabel_data(config)
         
     return train_data, val_data, test_data
 
@@ -201,7 +274,7 @@ def train(config):
     # Prepare logging and experiment directory
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
-    if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic":
+    if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic" and config.data.dataset != "multilabel_synthetic":
         pkl_file_dir = config.data.pkl_file_dir.strip("/")  
         ex_name = pkl_file_dir + "_" + ex_name
 
@@ -223,7 +296,7 @@ def train(config):
 
         
     
-    elif config.data.dataset == "multiclass_synthetic":
+    elif config.data.dataset == "multiclass_synthetic" or config.data.dataset == "multilabel_synthetic":
         if config.data.data_dir_name is not None:
             ex_name = config.data.data_dir_name + f"_trueResUsed_{config.model.use_residuals_from_data}_" + ex_name
         
@@ -231,6 +304,7 @@ def train(config):
             Path(config.experiment_dir) / config.model.model / config.data.dataset /ex_name
         )
         
+
     
     
     # CUB and CIFAR datasets
@@ -244,7 +318,7 @@ def train(config):
     config.experiment_dir = str(experiment_path)
     print("Experiment path: ", experiment_path)
     
-    
+    # Create log file
     log_file = os.path.join(experiment_path, "log.txt")
 
 
@@ -288,11 +362,11 @@ def train(config):
     
     
     
-    log_file = os.path.join(experiment_path, "log.txt")
+
     use_residuals_from_data = config.model.use_residuals_from_data 
     
     
-    if data_type == "synthetic_res_scbm" or data_type == "multiclass_synthetic":
+    if data_type == "synthetic_res_scbm" or data_type == "multiclass_synthetic" or data_type == "multilabel_synthetic":
         info_dict = {
             "model_type": model_type,
             "num_concepts": num_concepts,
@@ -317,7 +391,7 @@ def train(config):
     
     
 
-    if data_type == "synthetic_res_scbm" or data_type == "multiclass_synthetic":
+    if data_type == "synthetic_res_scbm" or data_type == "multiclass_synthetic" or data_type == "multilabel_synthetic":
         open_data_log_file_and_write_info(config, log_file, config.data.data_dir_name)
     
     
@@ -329,33 +403,89 @@ def train(config):
     model.to(device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.CrossEntropyLoss()
+    criterion = choose_loss(config, num_classes)
     
     
     for epoch in range(config.model.j_epochs):
         if epoch % config.model.validate_per_epoch == 0:
-            avg_loss, avg_accuracy = validate_one_epoch(config, model, val_loader, criterion, device)
-            print(f"Epoch {epoch+1}/{config.model.j_epochs}, Val loss: {avg_loss:.4f}, Val accuracy: {avg_accuracy:.4f}")
-            with open(log_file, "a") as f:
-                f.write(f"Epoch {epoch+1}/{config.model.j_epochs}, Validation Loss: {avg_loss:.4f}, Validation Accuracy: {avg_accuracy:.4f}\n")
-    
-        avg_loss, avg_accuracy = train_one_epoch(config, model, train_loader, optimizer, criterion, device)
-        print(f"Epoch {epoch+1}/{config.model.j_epochs}, Train loss: {avg_loss:.4f}, Train accuracy: {avg_accuracy:.4f}")
-        with open(log_file, "a") as f:
-            f.write(f"Epoch {epoch+1}/{config.model.j_epochs}, Train Loss: {avg_loss:.4f}, Train Accuracy: {avg_accuracy:.4f}\n")
+            metrics = validate_one_epoch(config, model, val_loader, criterion, device)
+            log_metrics(config, epoch, metrics, log_file, validation=True)
+            
+
+                
+        metrics = train_one_epoch(config, model, train_loader, optimizer, criterion, device)
+        log_metrics(config, epoch, metrics, log_file, validation=False)
         
     # Save model
     torch.save(model.state_dict(), os.path.join(experiment_path, "model.pth"))
+
     # Final evaluation on test set
-    avg_loss, avg_accuracy = validate_one_epoch(config, model, test_loader, criterion, device)
-    print(f"Final Test Loss: {avg_loss:.4f}, Final Test Accuracy: {avg_accuracy:.4f}")
+    metrics = validate_one_epoch(config, model, test_loader, criterion, device)
+
+    if config.data.dataset == "multilabel_synthetic":
+        macro_auroc = metrics.get("macro_auroc", float("nan"))
+        exact_match = metrics.get("exact_match", float("nan"))
+        per_task_auroc = metrics.get("per_task_auroc", [])
+        task_str = ", ".join(f"Task{i}: {auc:.4f}" for i, auc in enumerate(per_task_auroc))
+        msg = (
+            f"Final Test Loss: {metrics['loss']:.4f}, "
+            f"Hamming Acc: {metrics['accuracy']:.4f}, "
+            f"Macro AUROC: {macro_auroc:.4f}, "
+            f"Exact Match: {exact_match:.4f}\n"
+            f"  Per-task AUROC — {task_str}"
+        )
+    else:
+        msg = (
+            f"Final Test Loss: {metrics['loss']:.4f}, "
+            f"Final Test Accuracy: {metrics['accuracy']:.4f}"
+        )
+
+    print(msg)
     with open(log_file, "a") as f:
-        f.write(f"Final Test Loss: {avg_loss:.4f}, Final Test Accuracy: {avg_accuracy:.4f}\n")
+        f.write(msg + "\n")
+
+    
+    
+    
+def log_metrics(config, epoch, metrics, log_file, validation=False):
+    dataset_type = "Val" if validation else "Train"
+
+    avg_loss = metrics["loss"]
+    avg_accuracy = metrics["accuracy"]
+
+    if config.data.dataset != "multilabel_synthetic":
+        msg = (
+            f"Epoch {epoch+1}/{config.model.j_epochs}, "
+            f"{dataset_type} Loss: {avg_loss:.4f}, "
+            f"{dataset_type} Accuracy: {avg_accuracy:.4f}"
+        )
+    else:
+        msg = (
+            f"Epoch {epoch+1}/{config.model.j_epochs}, "
+            f"{dataset_type} Loss: {avg_loss:.4f}, "
+            f"{dataset_type} Hamming Acc: {avg_accuracy:.4f}"
+        )
+        if validation:
+            macro_auroc = metrics.get("macro_auroc", float("nan"))
+            exact_match = metrics.get("exact_match", float("nan"))
+            per_task_auroc = metrics.get("per_task_auroc", [])
+            msg += f", Macro AUROC: {macro_auroc:.4f}, Exact Match: {exact_match:.4f}"
+            if per_task_auroc:
+                task_str = ", ".join(
+                    f"Task{i}: {auc:.4f}" for i, auc in enumerate(per_task_auroc)
+                )
+                msg += f"\n  Per-task AUROC — {task_str}"
+
+    print(msg)
+    with open(log_file, "a") as f:
+        f.write(msg + "\n")
+    
+    
     
     
     
 def open_data_log_file_and_write_info(config, log_file, data_dir_name):
-    if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic":
+    if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic" and config.data.dataset != "multilabel_synthetic":
         raise ValueError("Only synthetic datasets are supported for writing this info")
     
     if config.data.dataset == "synthetic_res_scbm":
@@ -368,6 +498,11 @@ def open_data_log_file_and_write_info(config, log_file, data_dir_name):
         data_dir_full_path = os.path.join(config.data.data_path, "multiclass_synthetic", data_dir_name)
         
         
+    elif config.data.dataset == "multilabel_synthetic":
+        data_dir_full_path = os.path.join(config.data.data_path, "multilabel_synthetic", data_dir_name)
+        
+    
+        
     info_file = os.path.join(data_dir_full_path, "info.txt")
     with open(log_file, "a") as f:
         with open(info_file, "r") as info_f:
@@ -376,7 +511,11 @@ def open_data_log_file_and_write_info(config, log_file, data_dir_name):
         
         
 
-
+def choose_loss(config, num_classes):
+    if num_classes == 2 or config.data.dataset == "multilabel_synthetic":
+        return nn.BCEWithLogitsLoss()
+    else:
+        return nn.CrossEntropyLoss()
     
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")

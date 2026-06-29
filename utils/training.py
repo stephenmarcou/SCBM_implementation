@@ -759,9 +759,7 @@ def validate_one_epoch_scbm(
     """
     model.eval()
 
-    # Compute classwise covariance matrices
-    classwise_covariances = {}
-    classwise_counts = {}
+
     with torch.no_grad():
 
         for k, batch in enumerate(
@@ -777,14 +775,7 @@ def validate_one_epoch_scbm(
             # Compute covariance matrix of concepts
             cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
 
-            batch_class_ids = target_true.detach().cpu().tolist()
-            for sample_idx, class_id in enumerate(batch_class_ids):
-                if class_id not in classwise_covariances:
-                    classwise_covariances[class_id] = cov[sample_idx].detach().cpu().clone()
-                    classwise_counts[class_id] = 1
-                else:
-                    classwise_covariances[class_id] += cov[sample_idx].detach().cpu()
-                    classwise_counts[class_id] += 1
+
 
             if test and k % (len(loader) // 10) == 0:
                 try:
@@ -839,18 +830,7 @@ def validate_one_epoch_scbm(
         with open(log_file, "a") as f:
             f.write(prints + "\n")
 
-    if test:
-        averaged_classwise_covariances = {
-            class_id: classwise_covariances[class_id] / classwise_counts[class_id]
-            for class_id in classwise_covariances
-            if classwise_counts.get(class_id, 0) > 0
-        }
-        if averaged_classwise_covariances and log_file is not None:
-            save_path = Path(log_file).parent / "classwise_covariances.pt"
-            torch.save(averaged_classwise_covariances, save_path)
-            print(f"Saved classwise covariances to {save_path}")
-            with open(log_file, "a") as f:
-                f.write(f"Saved classwise covariances to {save_path}\n")
+
                 
     
     
