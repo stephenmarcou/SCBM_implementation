@@ -18,7 +18,7 @@ from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from datasets.CUB_dataset import get_CUB_dataloaders
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data
 
-
+from sklearn.metrics import roc_auc_score
 
 
 class CUBDataset(Dataset):
@@ -185,22 +185,25 @@ def validate_one_epoch(config, model, val_loader, criterion, device):
 
     # For multilabel synthetic dataset, compute AUROC and exact match metrics
     if config.data.dataset == "multilabel_synthetic":
-        from sklearn.metrics import roc_auc_score
+
         all_probs = torch.cat(all_probs, dim=0).numpy()    # (N, K)
         all_labels = torch.cat(all_labels, dim=0).numpy()  # (N, K)
 
         try:
             macro_auroc = roc_auc_score(all_labels, all_probs, average="macro")
             per_task_auroc = roc_auc_score(all_labels, all_probs, average=None).tolist()
+            per_task_accuracy = ((all_probs > 0.5) == all_labels).mean(axis=0).tolist()
         except ValueError:
             macro_auroc = float("nan")
             per_task_auroc = [float("nan")] * all_labels.shape[1]
+            per_task_accuracy = [float("nan")] * all_labels.shape[1]
 
         exact_match = (
             ((all_probs > 0.5) == all_labels).all(axis=1).mean()
         )
         metrics["macro_auroc"] = macro_auroc
         metrics["per_task_auroc"] = per_task_auroc
+        metrics["per_task_accuracy"] = per_task_accuracy
         metrics["exact_match"] = exact_match
 
     return metrics
@@ -426,13 +429,15 @@ def train(config):
         macro_auroc = metrics.get("macro_auroc", float("nan"))
         exact_match = metrics.get("exact_match", float("nan"))
         per_task_auroc = metrics.get("per_task_auroc", [])
-        task_str = ", ".join(f"Task{i}: {auc:.4f}" for i, auc in enumerate(per_task_auroc))
+        auroc_str = ", ".join(f"y_auroc_{i}: {auc:.4f}" for i, auc in enumerate(per_task_auroc))
+        accuracy_str = ", ".join(f"y_accuracy_{i}: {acc:.4f}" for i, acc in enumerate(metrics.get("per_task_accuracy", [])))
         msg = (
             f"Final Test Loss: {metrics['loss']:.4f}, "
             f"Hamming Acc: {metrics['accuracy']:.4f}, "
             f"Macro AUROC: {macro_auroc:.4f}, "
-            f"Exact Match: {exact_match:.4f}\n"
-            f"  Per-task AUROC — {task_str}"
+            f"Exact Match: {exact_match:.4f}, "
+            f"{auroc_str}, "
+            f"{accuracy_str}"
         )
     else:
         msg = (
@@ -469,12 +474,18 @@ def log_metrics(config, epoch, metrics, log_file, validation=False):
             macro_auroc = metrics.get("macro_auroc", float("nan"))
             exact_match = metrics.get("exact_match", float("nan"))
             per_task_auroc = metrics.get("per_task_auroc", [])
-            msg += f", Macro AUROC: {macro_auroc:.4f}, Exact Match: {exact_match:.4f}"
+            per_task_accuracy = metrics.get("per_task_accuracy", [])
+            msg += f", Macro AUROC: {macro_auroc:.4f}, Exact Match: {exact_match:.4f}, "
             if per_task_auroc:
-                task_str = ", ".join(
-                    f"Task{i}: {auc:.4f}" for i, auc in enumerate(per_task_auroc)
+                auroc_str = ", ".join(
+                    f"y_auroc_{i}: {auc:.4f}" for i, auc in enumerate(per_task_auroc)
                 )
-                msg += f"\n  Per-task AUROC — {task_str}"
+                msg += f"{auroc_str}, "
+            if per_task_accuracy:
+                accuracy_str = ", ".join(
+                    f"y_accuracy_{i}: {acc:.4f}" for i, acc in enumerate(per_task_accuracy)
+                )
+                msg += f"{accuracy_str}"
 
     print(msg)
     with open(log_file, "a") as f:
@@ -517,10 +528,23 @@ def choose_loss(config, num_classes):
     else:
         return nn.CrossEntropyLoss()
     
+def check_num_classes_multilabel_data(config):
+    data_path = os.path.join(config.data.data_path, "multilabel_synthetic", config.data.data_dir_name)
+    with open(os.path.join(data_path, "info.txt"), "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            if "num_tasks/num_classes" in line:
+                num_tasks = int(line.split(":")[1].strip())
+                config.data.num_classes = num_tasks
 
+
+    
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(config: DictConfig) -> None:
-
+    # The other datasets have correct number of classes in the config, for multilabel
+    # it is more flexible with how many classes/tasks we train with
+    if config.data.dataset == "multilabel_synthetic":
+        check_num_classes_multilabel_data(config)
     print("Configuration:")
     print(config)
     train(config)

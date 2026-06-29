@@ -38,6 +38,8 @@ alpha: 1.0
 #   Higher beta -> each hidden concept is more individually decisive.
 beta: 1.0
 
+standardize: false # Whether to standardize the hidden and observed concept scores before mixing them into the final subtask scores. Standardization makes the alpha and beta coefficients more interpretable.
+
 # --------------------------
 # Concept dependency structure
 # --------------------------
