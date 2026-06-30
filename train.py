@@ -120,6 +120,7 @@ def create_experiment_path(config):
         ex_name = "L_int_extension_loss_weight_" + str(config.model.L_int_extension_loss_weight) + "_" + ex_name
 
 
+
     
     if config.data.dataset == "CUB":    
         if config.save_name is not None:
@@ -131,20 +132,12 @@ def create_experiment_path(config):
         else:
             ex_name = "complete_" + ex_name
     
-    elif config.data.dataset == "synthetic_res_scbm":
-        ex_name = config.save_name + "_" + ex_name
-        if config.model.regression_task:
-            ex_name = "regression_" + ex_name
-        ex_name =  f"alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr{config.data.rho_cr}_rho_cc{config.data.rho_cc}_rho_rr{config.data.rho_rr}_sigma_x_{config.data.sigma_x}_" + ex_name
-    
-    elif config.data.dataset == "multiclass_synthetic":
-        ex_name = config.save_name + "_" + ex_name
-        ex_name = f"hid_class_bits_{config.data.num_hid_class_bits}_obs_class_bits_{config.data.num_obs_class_bits}_num_classes_{config.data.num_classes}_sigma_x_{config.data.sigma_x}_" + ex_name
-        
+
         
     elif config.data.dataset == "multilabel_synthetic":
-        ex_name = config.save_name + "_" + ex_name
-        ex_name = f"hid_tasks_{config.data.num_hid_tasks}_obs_tasks_{config.data.num_obs_tasks}_alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr_{config.data.rho_cr}_rho_cc_{config.data.rho_cc}_rho_rr_{config.data.rho_rr}_w_ratio_{config.data.min_weight_ratio}_sigma_x_{config.data.sigma_x}_standardize_{config.data.standardize}_" + ex_name
+        if config.save_name is not None:
+            ex_name = config.save_name + "_" + ex_name
+        ex_name = f"K_{config.data.num_hid_tasks}_J_{config.data.num_obs_tasks}_alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr_{config.data.rho_cr}_rho_cc_{config.data.rho_cc}_rho_rr_{config.data.rho_rr}_w_ratio_{config.data.min_weight_ratio}_sigma_x_{config.data.sigma_x}_standardize_{config.data.standardize}_num_res_{config.data.num_residuals}_" + ex_name
         
         
     if config.hyperparameter_search:
