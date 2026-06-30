@@ -324,6 +324,17 @@ class MultilabelSyntheticResidualDataset(Dataset):
         s_hid = np.zeros((self.n_samples, self.num_hid_tasks), dtype=np.float32)
         y_hid = np.zeros((self.n_samples, self.num_hid_tasks), dtype=np.float32)
 
+        def median_split(s):
+            """Binary split at the median, breaking ties by rank instead of raw value.
+            Avoids degenerate single-class labels when s has a tied point-mass
+            (e.g. zero-inflated per-concept signals at low/zero beta)."""
+            ranks = rankdata(s, method="ordinal")
+            return (ranks > len(s) / 2).astype(np.float32)
+
+
+
+
+
         for k, idx in enumerate(hid_task_idx):
             hid_specific = residual_signal[:, idx] * float(np.abs(w_hid[idx]))
 
@@ -333,7 +344,7 @@ class MultilabelSyntheticResidualDataset(Dataset):
             # alpha = main hidden-specific signal
             # beta  = auxiliary observed context
             s_hid[:, k] = self.alpha * hid_specific + self.beta * shared_obs_score
-            y_hid[:, k] = (s_hid[:, k] >= np.median(s_hid[:, k])).astype(np.float32)
+            y_hid[:, k] = median_split(s_hid[:, k])
 
         s_obs = np.zeros((self.n_samples, self.num_obs_tasks), dtype=np.float32)
         y_obs = np.zeros((self.n_samples, self.num_obs_tasks), dtype=np.float32)
@@ -347,7 +358,7 @@ class MultilabelSyntheticResidualDataset(Dataset):
             # alpha = main observed-specific signal
             # beta  = auxiliary hidden context
             s_obs[:, j] = self.alpha * obs_specific + self.beta * shared_hid_score
-            y_obs[:, j] = (s_obs[:, j] >= np.median(s_obs[:, j])).astype(np.float32)
+            y_obs[:, j] = median_split(s_obs[:, j])
 
         # Final label matrix: (n, K+J)
         y = np.concatenate([y_hid, y_obs], axis=1).astype(np.float32)
