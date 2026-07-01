@@ -452,16 +452,8 @@ def validate_one_epoch_scbm_residual(
     
     
     model.eval()
-
-
     
-    residual_probs_mean_list = []
-    residual_prob_std_list = []
-    residual_mean_list = []
-    residual_std_list = []
-    
-    res_mu_list = []
-    
+    # Metadata lists to store concept residuals and predictions for saving
     concepts_residual_probs_mean_list = []
     concepts_residual_prob_std_list = []
     concepts_residual_mean_list = []
@@ -470,6 +462,9 @@ def validate_one_epoch_scbm_residual(
     c_res_mu_list = []
     
     y_pred_list = []
+    
+    cov_matrix_sum = None
+    cov_matrix_count = 0
     
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
@@ -502,33 +497,10 @@ def validate_one_epoch_scbm_residual(
                 
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
             
-            # Save the residual channel 
-            if config.data.save_residual_channel and save_residual_meta_data_folder:
-                residuals_mcmc_probs = concepts_residuals_mcmc_probs[
-                    :, config.data.num_concepts:, :
-                ].detach()
-
-                residuals_mcmc = concepts_residuals_mcmc[
-                    :, config.data.num_concepts:, :
-                ].detach()
-                
-                res_mu = c_res_mu[:, config.data.num_concepts:].detach()
-                
-                res_mu_list.append(res_mu.cpu())
-
-                residuals_pred_probs = residuals_mcmc_probs.mean(dim=-1)
-                # unbiased=False ensures that we do not get nan if only one monte carlo sample used 
-                residuals_prob_std = residuals_mcmc_probs.std(dim=-1, unbiased=False)
-
-                residuals_sample_mean = residuals_mcmc.float().mean(dim=-1)
-                residuals_sample_std = residuals_mcmc.float().std(dim=-1, unbiased=False)
-
-                residual_probs_mean_list.append(residuals_pred_probs.cpu())
-                residual_prob_std_list.append(residuals_prob_std.cpu())
-
-                residual_mean_list.append(residuals_sample_mean.cpu())
-                residual_std_list.append(residuals_sample_std.cpu())
-                
+             # Compute covariance matrix of concepts
+            cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
+            
+            # Save the concept-residual channel 
             if config.data.save_concept_and_residual_channel and save_residual_meta_data_folder:
                 concepts_residuals_mcmc_probs_detached = concepts_residuals_mcmc_probs.detach()
 
@@ -551,6 +523,14 @@ def validate_one_epoch_scbm_residual(
                 concepts_residual_std_list.append(concepts_residuals_sample_std.cpu())
                 
                 y_pred_list.append(target_pred_logits.cpu())
+                
+                sigma_mean_batch = cov.mean(dim=0).cpu() #[C+R, C+R]
+                if cov_matrix_sum is None:
+                    cov_matrix_sum = sigma_mean_batch
+                else:
+                    cov_matrix_sum += sigma_mean_batch
+                cov_matrix_count += 1
+                                
                 
                 
                 
@@ -634,35 +614,7 @@ def validate_one_epoch_scbm_residual(
         print(prints)
         print()
 
-    if config.data.save_residual_channel and save_residual_meta_data_folder:
-        residuals_mean_tensor = torch.cat(residual_mean_list, dim=0)
-        residuals_std_tensor = torch.cat(residual_std_list, dim=0)
-        residual_probs_mean_tensor = torch.cat(residual_probs_mean_list, dim=0)
-        residual_probs_std_tensor = torch.cat(residual_prob_std_list, dim=0)
-        res_mu_tensor = torch.cat(res_mu_list, dim=0)
 
-
-        parent_dir_path = os.path.dirname(log_file)
-        full_path = os.path.join(parent_dir_path, save_residual_meta_data_folder)
-        Path(full_path).mkdir(parents=True, exist_ok=True)
-        
-        save_path_residual_mean = os.path.join(full_path, "residuals_sample_mean.pt")
-        save_path_residual_std = os.path.join(full_path, "residuals_sample_std.pt")
-        save_path_residual_probs_mean = os.path.join(full_path, "residuals_pred_probs_mean.pt")
-        save_path_residual_probs_std = os.path.join(full_path, "residuals_pred_probs_std.pt")
-        save_path_res_mu = os.path.join(full_path, "res_mu.pt")
-
-        torch.save(residuals_mean_tensor, save_path_residual_mean)
-        torch.save(residuals_std_tensor, save_path_residual_std)
-        torch.save(residual_probs_mean_tensor, save_path_residual_probs_mean)
-        torch.save(residual_probs_std_tensor, save_path_residual_probs_std)
-        torch.save(res_mu_tensor, save_path_res_mu)
-
-        print(f"Saved residual means to {save_path_residual_mean}")
-        print(f"Saved residual stds to {save_path_residual_std}")
-        print(f"Saved residual predicted probabilities means to {save_path_residual_probs_mean}")
-        print(f"Saved residual predicted probabilities stds to {save_path_residual_probs_std}")
-        print(f"Saved residual mu to {save_path_res_mu}")
 
 
     if config.data.save_concept_and_residual_channel and save_residual_meta_data_folder:
@@ -686,12 +638,19 @@ def validate_one_epoch_scbm_residual(
         save_path_concepts_residual_probs_std = os.path.join(full_path, "concepts_residuals_pred_probs_std.pt")
         save_path_c_res_mu = os.path.join(full_path, "c_res_mu.pt")
         save_path_y_pred = os.path.join(full_path, "y_pred.pt")
+        
+        cov_matrix_avg = cov_matrix_sum / cov_matrix_count  # [C+R, C+R]
+        save_path_cov = os.path.join(full_path, "avg_covariance_matrix.pt")
+        
+        
+        
         torch.save(concepts_residuals_mean_tensor, save_path_concepts_residual_mean)
         torch.save(concepts_residuals_std_tensor, save_path_concepts_residual_std)
         torch.save(concepts_residuals_probs_mean_tensor, save_path_concepts_residual_probs_mean)
         torch.save(concepts_residuals_probs_std_tensor, save_path_concepts_residual_probs_std)
         torch.save(c_res_mu_tensor, save_path_c_res_mu)
         torch.save(y_pred_tensor, save_path_y_pred)
+        torch.save(cov_matrix_avg, save_path_cov)
 
         print(f"Saved concepts residuals means to {save_path_concepts_residual_mean}")
         print(f"Saved concepts residuals stds to {save_path_concepts_residual_std}")
@@ -699,6 +658,7 @@ def validate_one_epoch_scbm_residual(
         print(f"Saved concepts residuals predicted probabilities stds to {save_path_concepts_residual_probs_std}")
         print(f"Saved c_res_mu to {save_path_c_res_mu}")
         print(f"Saved y_pred to {save_path_y_pred}")
+        print(f"Saved average covariance matrix to {save_path_cov}")
     
     
     

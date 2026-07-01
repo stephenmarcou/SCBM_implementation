@@ -421,6 +421,7 @@ class SCBM_residual(nn.Module):
         super(SCBM_residual, self).__init__()
 
         # Configuration arguments
+        self.block_diagonal_cov = config.model.block_diagonal_cov
         config_model = config.model
         self.num_concepts = config.data.num_concepts
         self.num_residuals = config.data.num_residuals
@@ -500,14 +501,27 @@ class SCBM_residual(nn.Module):
             )
         # Linear network to predict sigma of concept+residual distribution (lower triangle of covariance matrix in logit space)
         else:
-            self.sigma_concepts_residuals = nn.Linear(
-                n_features,
-                int((self.num_concepts + self.num_residuals) * (self.num_concepts + self.num_residuals + 1) / 2),
-                bias=True,
-            )
-            self.sigma_concepts_residuals.weight.data *= (
-                0.01  # To prevent exploding precision matrix at initialization
-            )
+            # Have block diagonal covariance matrix with concept and residual blocks, but no off-diagonal blocks
+            if self.block_diagonal_cov:
+                n_c_tri = self.num_concepts * (self.num_concepts + 1) // 2
+                n_r_tri = self.num_residuals * (self.num_residuals + 1) // 2
+
+                self.sigma_concepts = nn.Linear(n_features, n_c_tri, bias=True)
+                self.sigma_residuals = nn.Linear(n_features, n_r_tri, bias=True)
+                
+                self.sigma_concepts.weight.data *= 0.01
+                self.sigma_residuals.weight.data *= 0.01
+
+            # Otherwise, have full covariance matrix for concept+residuals
+            else:
+                self.sigma_concepts_residuals = nn.Linear(
+                    n_features,
+                    int((self.num_concepts + self.num_residuals) * (self.num_concepts + self.num_residuals + 1) / 2),
+                    bias=True,
+                )
+                self.sigma_concepts_residuals.weight.data *= (
+                    0.01  # To prevent exploding precision matrix at initialization
+                )
 
         # Assume binary concepts
         self.act_c = nn.Sigmoid()
@@ -585,31 +599,66 @@ class SCBM_residual(nn.Module):
         elif self.cov_type == "empirical":
             c_res_sigma = self.sigma_concepts_residuals.unsqueeze(0).repeat(c_res_mu.size(0), 1, 1)
         else:
-            c_res_sigma = self.sigma_concepts_residuals(intermediate)
+            
+            if self.block_diagonal_cov:
+                c_sigma = self.sigma_concepts(intermediate)
+                r_sigma = self.sigma_residuals(intermediate)
+                check_finite("c_sigma", c_sigma)
+                check_finite("r_sigma", r_sigma)
+            else:
+                c_res_sigma = self.sigma_concepts_residuals(intermediate)
 
-        check_finite("c_res_sigma", c_res_sigma)
+                check_finite("c_res_sigma", c_res_sigma)
 
 
         if self.cov_type == "empirical":
             c_res_triang_cov = c_res_sigma
         else:
-            # Fill the lower triangle of the covariance matrix with the values and make diagonal positive
-            c_res_triang_cov = torch.zeros(
-                (c_res_sigma.shape[0], self.num_concepts + self.num_residuals, self.num_concepts + self.num_residuals),
-                device=c_res_sigma.device,
-            )
-            rows, cols = torch.tril_indices(
-                row=self.num_concepts + self.num_residuals, col=self.num_concepts + self.num_residuals, offset=0
-            )
-            diag_idx = rows == cols
-            c_res_triang_cov[:, rows, cols] = c_res_sigma
+            if self.block_diagonal_cov:
+                C, R = self.num_concepts, self.num_residuals
+                B = c_sigma.shape[0]
+                
+                
+                
+                # Fill L_CC
+                rows_c, cols_c = torch.tril_indices(C, C, offset=0, device=intermediate.device)
+                L_CC = torch.zeros(B, C, C, device=intermediate.device)
+                L_CC[:, rows_c, cols_c] = c_sigma
+                L_CC[:, range(C), range(C)] = F.softplus(c_sigma[:, rows_c == cols_c]) + 1e-6
+                
+                # Fill L_RR
+                rows_r, cols_r = torch.tril_indices(R, R, offset=0, device=intermediate.device)
+                L_RR = torch.zeros(B, R, R, device=intermediate.device)
+                L_RR[:, rows_r, cols_r] = r_sigma
+                L_RR[:, range(R), range(R)] = F.softplus(r_sigma[:, rows_r == cols_r]) + 1e-6
+                
+                # Assemble block-diagonal L
+                c_res_triang_cov = torch.zeros(B, C + R, C + R, device=intermediate.device)
+                c_res_triang_cov[:, :C, :C] = L_CC
+                c_res_triang_cov[:, C:, C:] = L_RR
+                
+                check_finite("c_res_triang_cov post diag", c_res_triang_cov)
             
-            check_finite("c_res_triang_cov pre diag", c_res_triang_cov)
             
-            c_res_triang_cov[:, range(self.num_concepts + self.num_residuals), range(self.num_concepts + self.num_residuals)] = (
-                F.softplus(c_res_sigma[:, diag_idx]) + 1e-6
-            )
-            check_finite("c_res_triang_cov post diag", c_res_triang_cov)
+            else:
+                # Fill the lower triangle of the covariance matrix with the values and make diagonal positive
+                c_res_triang_cov = torch.zeros(
+                    (c_res_sigma.shape[0], self.num_concepts + self.num_residuals, self.num_concepts + self.num_residuals),
+                    device=c_res_sigma.device,
+                )
+                # tril_indices returns the row and column indices of the lower triangular part of a matrix, including the diagonal
+                rows, cols = torch.tril_indices(
+                    row=self.num_concepts + self.num_residuals, col=self.num_concepts + self.num_residuals, offset=0
+                )
+                diag_idx = rows == cols
+                c_res_triang_cov[:, rows, cols] = c_res_sigma
+                
+                check_finite("c_res_triang_cov pre diag", c_res_triang_cov)
+                
+                c_res_triang_cov[:, range(self.num_concepts + self.num_residuals), range(self.num_concepts + self.num_residuals)] = (
+                    F.softplus(c_res_sigma[:, diag_idx]) + 1e-6
+                )
+                check_finite("c_res_triang_cov post diag", c_res_triang_cov)
             
         # Sample from predicted normal distribution
         c_res_dist = MultivariateNormal(c_res_mu, scale_tril=c_res_triang_cov)
@@ -841,11 +890,18 @@ class SCBM_residual(nn.Module):
     def freeze_t(self):
         self.head.apply(unfreeze_module)
         self.encoder.apply(freeze_module)
-        self.mu_concepts.apply(freeze_module)
-        if isinstance(self.sigma_concepts, nn.Linear):
-            self.sigma_concepts.apply(freeze_module)
-        else:
-            self.sigma_concepts.requires_grad = False
+        self.mu_concepts_residuals.apply(freeze_module)  # FIX 1
+
+        # FIX 2: branch on cov_type and block_diagonal_cov
+        if self.cov_type == "global":
+            self.sigma_concepts_residuals.requires_grad = False
+        elif self.cov_type == "amortized":
+            if self.block_diagonal_cov:
+                self.sigma_concepts.apply(freeze_module)
+                self.sigma_residuals.apply(freeze_module)
+            else:
+                self.sigma_concepts_residuals.apply(freeze_module)
+        # empirical has no parameters to freeze
 
 
 class CBM(nn.Module):

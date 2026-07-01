@@ -119,6 +119,8 @@ def create_experiment_path(config):
     if config.model.get("use_L_int_extension_loss"):
         ex_name = "L_int_extension_loss_weight_" + str(config.model.L_int_extension_loss_weight) + "_" + ex_name
 
+    if config.model.model == "scbm_residual" and config.model.block_diagonal_cov:
+        ex_name = "block_diagonal_cov_True_" + ex_name
 
 
     

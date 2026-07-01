@@ -6,7 +6,6 @@ defaults:
   - data_defaults # Inherit data_defaults arguments
 dataset: 'multilabel_synthetic' # Name of the dataset
 save_data: false # Whether to save the generated dataset to disk
-save_residual_channel: false
 save_concept_and_residual_channel: false # Whether to save the predicted concepts and residuals for each data point
 
 # --------------------------

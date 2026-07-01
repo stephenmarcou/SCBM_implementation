@@ -775,6 +775,22 @@ def load_saved_multilabel_data(config):
     return train, val, test
 
 
+def ensure_noise_matches(config):
+    data_dir_root = os.path.join(config.data.data_path, config.data.dataset)
+    full_data_dir_path = os.path.join(data_dir_root, config.data.data_dir_name)
+    
+    with open(os.path.join(full_data_dir_path, "info.txt"), "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("sigma_x"):
+                noise_value = float(line.split(":")[1].strip())
+                break
+    if abs(noise_value - config.data.sigma_x) > 1e-6:
+        raise ValueError(f"Noise mismatch: info.txt has sigma_x={noise_value}, but config has sigma_x={config.data.sigma_x}")
+
+
+
+
 def check_multilabel_dataset(config):
     """
     Populate config fields derived from the dataset structure.
@@ -786,10 +802,13 @@ def check_multilabel_dataset(config):
     """
     if config.data.data_dir_name is None:
         num_hid_tasks = config.data.num_hid_tasks
-        num_obs_tasks = getattr(config.data, "num_obs_tasks", 1)
+        num_obs_tasks = config.data.num_obs_tasks
         config.data.num_classes = num_hid_tasks + num_obs_tasks
         config.data.num_concepts = config.data.obs_dim
     else:
         train_data, _, _ = load_saved_multilabel_data(config)
         config.data.num_concepts = train_data.concepts.shape[1]
         config.data.num_classes = train_data.y.shape[1]
+        # Ensure sigma_x in config matches the saved dataset
+        ensure_noise_matches(config)
+
