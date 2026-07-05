@@ -72,6 +72,12 @@ Design choices
   dataset behaviour).
 - With alpha=1, beta=1 the subtasks mix both channels, giving a more realistic
   and harder setting.
+- concepts_per_hid_task (M) generalizes the hidden subtasks: with M > 1 each
+  subtask's private term is a signed weighted sum over an M-sized subset of the
+  active hidden concepts, subsets overlapping across tasks (concepts != tasks).
+  This breaks the 1:1 task<->concept correspondence so that concept discovery
+  is no longer equivalent to task decomposition. M=1 reproduces the legacy
+  behaviour exactly (same RNG stream, same labels for a given seed).
 """
 
 import numpy as np
@@ -108,6 +114,15 @@ class MultilabelSyntheticResidualDataset(Dataset):
         Number of hidden-concept subtasks (K). Each uses one hidden concept
         as its primary signal. Must be <= number of active hidden concepts
         implied by task_sparsity_hid * hid_dim.
+    concepts_per_hid_task : int, default 1
+        Number of hidden concepts (M) each hidden subtask depends on.
+        1  -> legacy behaviour: one concept per subtask, chosen top-K by |w_hid|
+              (identical RNG stream and labels to the pre-knob code).
+        >1 -> each subtask's private term is a signed weighted sum over M
+              concepts. Subsets are drawn from ALL active hidden concepts
+              (pool size = floor(task_sparsity_hid * hid_dim)), overlap across
+              tasks, and every pool concept is covered by at least one task.
+              Requires M <= pool size and K*M >= pool size.
     num_obs_tasks : int
         Number of observed-concept subtasks (J). Keeps the concept encoder
         task-relevant. Default 1.
@@ -142,7 +157,9 @@ class MultilabelSyntheticResidualDataset(Dataset):
     w_obs              : (obs_dim,) float32     — sparse observed task weights
     w_hid              : (hid_dim,) float32     — sparse hidden task weights
     Sigma              : (obs_dim+hid_dim, obs_dim+hid_dim) float32
-    hid_task_idx       : (K,) int64  — hidden concept indices per subtask
+    hid_task_idx       : (K,) or (K, M) int64 — hidden concept indices per subtask
+    w_task_hid         : (K, hid_dim) float32 — dense per-task private-term weights
+                         over hidden concepts (one nonzero per row when M=1)
     obs_task_idx       : (J,) int64  — observed concept indices per subtask
     num_hid_tasks      : int  K
     num_obs_tasks      : int  J
@@ -178,10 +195,15 @@ class MultilabelSyntheticResidualDataset(Dataset):
         self.seed = config.seed
         self.min_weight_ratio = config.data.min_weight_ratio
         self.standardize = config.data.standardize
-        
+        # 1 = single-concept subtasks (legacy path); >1 = multi-concept subtasks
+        self.concepts_per_hid_task = config.data.get("concepts_per_hid_task", 1)
+        # "lowrank" (legacy) or "paired" (exact corr(eta_c_i, eta_r_i) = rho_cr)
+        self.cov_structure = config.data.get("cov_structure", "lowrank")
+
         assert self.num_hid_tasks >= 1, "num_hid_tasks must be >= 1"
         assert self.num_obs_tasks >= 1, "num_obs_tasks must be >= 1"
         assert self.alpha >= 0 and self.beta >= 0, "alpha or beta must be non-negative"
+        assert self.concepts_per_hid_task >= 1, "concepts_per_hid_task must be >= 1"
 
 
         rng = np.random.default_rng(self.seed)
@@ -197,6 +219,7 @@ class MultilabelSyntheticResidualDataset(Dataset):
             rho_rr=self.rho_rr,
             rho_cr=self.rho_cr,
             rng=rng,
+            cov_structure=self.cov_structure,
         )
 
         # ----------------------------------------------------------------
@@ -252,9 +275,56 @@ class MultilabelSyntheticResidualDataset(Dataset):
             f"concepts ({n_active_obs}) implied by task_sparsity_obs={self.task_sparsity_obs}. "
             f"Increase task_sparsity_obs or decrease num_obs_tasks."
         )
+        if self.concepts_per_hid_task > 1:
+            assert self.concepts_per_hid_task <= n_active_hid, (
+                f"concepts_per_hid_task={self.concepts_per_hid_task} exceeds the pool of "
+                f"active hidden concepts ({n_active_hid}); raise task_sparsity_hid."
+            )
+            assert self.num_hid_tasks * self.concepts_per_hid_task >= n_active_hid, (
+                f"K*M = {self.num_hid_tasks * self.concepts_per_hid_task} slots cannot "
+                f"cover the {n_active_hid} active hidden concepts; every pool concept "
+                f"must appear in >=1 task for the evaluation to be well-defined."
+            )
 
-        # Top-K hidden / top-J observed indices by absolute task weight
-        hid_task_idx = np.argsort(np.abs(w_hid))[::-1][:self.num_hid_tasks].copy()
+        # Hidden task -> concept assignment
+        if self.concepts_per_hid_task == 1:
+            # Legacy path — top-K by |w_hid|, unchanged, and consumes no extra RNG
+            # draws, so seed-for-seed reproducibility of existing datasets is
+            # preserved.
+            hid_task_idx = np.argsort(np.abs(w_hid))[::-1][:self.num_hid_tasks].copy()  # (K,)
+            v_hid = None
+        else:
+            # Multi-concept subtasks: pool = ALL active hidden concepts (not top-K),
+            # so the number of task-relevant concepts is controlled by
+            # task_sparsity_hid and can exceed K (concepts != tasks).
+            M = self.concepts_per_hid_task
+            pool = rng.permutation(np.flatnonzero(w_hid))          # (P,) shuffled
+
+            # Coverage first: deal every pool concept round-robin into a task,
+            # so each concept is used by at least one subtask.
+            subsets = [list(pool[k::self.num_hid_tasks]) for k in range(self.num_hid_tasks)]
+
+            # Then fill each subset up to M with concepts it doesn't already
+            # contain — these repeats are what create the overlap between tasks.
+            for k in range(self.num_hid_tasks):
+                candidates = np.setdiff1d(pool, subsets[k])
+                extra = rng.choice(candidates, size=M - len(subsets[k]), replace=False)
+                subsets[k] = np.sort(np.concatenate([subsets[k], extra]).astype(np.int64))
+
+            hid_task_idx = np.stack(subsets)                        # (K, M)
+
+            # Per-(task, concept) mixing weights: same magnitude scheme as
+            # _make_sparse_weights (uniform 0.5..1 with a min-ratio floor within
+            # each task, so no concept is a negligible passenger), plus random
+            # signs — with heavily overlapping all-positive sums the K task
+            # scores become strongly correlated and the encoder can merge them;
+            # signs keep the per-task mixtures linearly distinguishable.
+            mags = rng.uniform(0.5, 1.0, size=(self.num_hid_tasks, M))
+            mags = np.maximum(mags, self.min_weight_ratio * mags.max(axis=1, keepdims=True))
+            signs = rng.choice([-1.0, 1.0], size=(self.num_hid_tasks, M))
+            v_hid = (mags * signs).astype(np.float32)               # (K, M)
+
+        # Top-J observed indices by absolute task weight
         obs_task_idx = np.argsort(np.abs(w_obs))[::-1][:self.num_obs_tasks].copy()
 
         # ----------------------------------------------------------------
@@ -336,8 +406,16 @@ class MultilabelSyntheticResidualDataset(Dataset):
 
 
 
-        for k, idx in enumerate(hid_task_idx):
-            hid_specific = residual_signal[:, idx] * float(np.abs(w_hid[idx]))
+        for k in range(self.num_hid_tasks):
+            if self.concepts_per_hid_task == 1:
+                idx = hid_task_idx[k]
+                hid_specific = residual_signal[:, idx] * float(np.abs(w_hid[idx]))
+            else:
+                # Signed weighted sum over the task's concept subset. The
+                # standardization below rescales the sum to unit variance, so
+                # beta keeps its meaning (background share = beta^2/(alpha^2+beta^2)).
+                idx = hid_task_idx[k]                       # (M,)
+                hid_specific = residual_signal[:, idx] @ v_hid[k]
 
             if self.standardize:
                 hid_specific = standardize(hid_specific)
@@ -388,8 +466,21 @@ class MultilabelSyntheticResidualDataset(Dataset):
         self.w_obs = torch.tensor(w_obs, dtype=torch.float32)
         self.w_hid = torch.tensor(w_hid, dtype=torch.float32)
         self.Sigma = torch.tensor(Sigma, dtype=torch.float32)
-        self.hid_task_idx = torch.tensor(hid_task_idx, dtype=torch.long)
+        self.hid_task_idx = torch.tensor(hid_task_idx, dtype=torch.long)  # (K,) or (K, M)
         self.obs_task_idx = torch.tensor(obs_task_idx, dtype=torch.long)
+
+        # Dense per-task weight matrix over hidden concepts (K, hid_dim):
+        # row k holds the private-term weights of subtask k. For
+        # concepts_per_hid_task=1 this is just |w_hid[idx_k]| at one position —
+        # same object, unified shape for downstream analysis.
+        # hid_dim = number of hidden concepts, not number of active concepts influencing the tasks
+        W_task = np.zeros((self.num_hid_tasks, self.hid_dim), dtype=np.float32)
+        for k in range(self.num_hid_tasks):
+            if self.concepts_per_hid_task == 1:
+                W_task[k, hid_task_idx[k]] = np.abs(w_hid[hid_task_idx[k]])
+            else:
+                W_task[k, hid_task_idx[k]] = v_hid[k]
+        self.w_task_hid = torch.tensor(W_task, dtype=torch.float32)
 
         # ----------------------------------------------------------------
         # 7. Apply split indices
@@ -432,8 +523,12 @@ class MultilabelSyntheticResidualDataset(Dataset):
         print(f"  num_obs_tasks  : {self.num_obs_tasks}  (J)")
         print(f"  num_tasks/num_classes      : {self.num_classes}  (K+J, = output dim of y)")
         print(f"  alpha / beta   : {self.alpha} / {self.beta}")
-        print(f"  hid_task_idx   : {self.hid_task_idx.tolist()}  "
-              f"|w_hid|={self.w_hid.abs()[self.hid_task_idx].numpy().round(3)}")
+        print(f"  concepts_per_hid_task : {self.concepts_per_hid_task}")
+        if self.concepts_per_hid_task == 1:
+            print(f"  hid_task_idx   : {self.hid_task_idx.tolist()}  "
+                  f"|w_hid|={self.w_hid.abs()[self.hid_task_idx].numpy().round(3)}")
+        else:
+            print(f"  hid_task_idx   : {self.hid_task_idx.tolist()}  (per-task concept subsets)")
         print(f"  obs_task_idx   : {self.obs_task_idx.tolist()}  "
               f"|w_obs|={self.w_obs.abs()[self.obs_task_idx].numpy().round(3)}")
         print(f"  label counts   : {self.label_counts().round(0).astype(int)}")
@@ -445,7 +540,8 @@ class MultilabelSyntheticResidualDataset(Dataset):
 # Private helpers  (identical to multiclass_synthetic_dataset.py)
 # ---------------------------------------------------------------------------
 
-def _make_covariance(obs_dim, hid_dim, latent_rank, rho_cc, rho_rr, rho_cr, rng):
+def _make_covariance(obs_dim, hid_dim, latent_rank, rho_cc, rho_rr, rho_cr, rng,
+                     cov_structure="lowrank"):
     """
     Build a positive-definite covariance matrix with controllable block structure.
 
@@ -455,8 +551,30 @@ def _make_covariance(obs_dim, hid_dim, latent_rank, rho_cc, rho_rr, rho_cr, rng)
     rho_cc : scales off-diagonal entries in the observed-observed block
     rho_rr : scales off-diagonal entries in the hidden-hidden block
     rho_cr : scales entries in the cross block
+
+    cov_structure:
+        "lowrank" — blocks scale entries of a normalized rank-`latent_rank` base
+            matrix. Realized correlations are diluted (entries ~1/sqrt(latent_rank))
+            and capped: the PSD repair below cancels rho_cr beyond ~0.4-0.5
+            (realized mean |rho| saturates near 0.1). Use for mild correlation only.
+        "paired" — corr(eta_c_i, eta_r_i) = rho_cr exactly for
+            i < min(obs_dim, hid_dim); all other pairs independent. PSD for any
+            |rho_cr| < 1, no repair, realized = nominal. Hidden concepts with
+            index >= obs_dim stay uncorrelated (negative controls). Ignores
+            latent_rank; requires rho_cc = rho_rr = 0.
     """
     total_dim = obs_dim + hid_dim
+
+    if cov_structure == "paired":
+        assert rho_cc == 0.0 and rho_rr == 0.0, (
+            "cov_structure='paired' only controls the cross block; set rho_cc=rho_rr=0"
+        )
+        assert abs(rho_cr) < 1.0, "paired covariance requires |rho_cr| < 1"
+        Sigma = np.eye(total_dim)
+        for i in range(min(obs_dim, hid_dim)):
+            Sigma[i, obs_dim + i] = rho_cr
+            Sigma[obs_dim + i, i] = rho_cr
+        return Sigma.astype(np.float32)
 
     if latent_rank == 0:
         return (np.eye(total_dim) + 0.1 * np.eye(total_dim)).astype(np.float32)
@@ -550,6 +668,7 @@ def get_multilabel_datasets(config, seed, log_file=None):
     config.data.task_sparsity_hid
     config.data.num_hid_tasks        (int, >= 1)
     config.data.num_obs_tasks        (int, >= 1, default 1)
+    config.data.concepts_per_hid_task (int, >= 1, default 1; see class docstring)
     config.data.alpha                (float, default 1.0)
     config.data.beta                 (float, default 1.0)
     config.data.rho_cc               (float, default 0.0)
@@ -648,6 +767,8 @@ def save_multilabel_data(config, train, val, test, log_file):
         + f"_obs_dim_{train.obs_dim}"
         + f"_w_ratio_{train.min_weight_ratio}"
         + f"_standardize_{train.standardize}"
+        + (f"_cpt_{train.concepts_per_hid_task}" if train.concepts_per_hid_task > 1 else "")
+        + ("_paired" if train.cov_structure == "paired" else "")
         + f"_seed_{config.seed}"
     )
 
@@ -668,6 +789,7 @@ def save_multilabel_data(config, train, val, test, log_file):
         "s_hid", "s_obs",
         "w_obs", "w_hid", "Sigma",
         "hid_task_idx", "obs_task_idx",
+        "w_task_hid",
     ]
 
     for split_name, dataset in [("train", train), ("val", val), ("test", test)]:
@@ -704,6 +826,8 @@ def save_multilabel_data(config, train, val, test, log_file):
         f.write(f"data created for model at: {log_parent}\n")
         f.write(f"standardize : {train.standardize}\n")
         f.write(f"latent_rank : {train.latent_rank}\n")
+        f.write(f"concepts_per_hid_task : {train.concepts_per_hid_task}\n")
+        f.write(f"cov_structure : {train.cov_structure}\n")
 
     with open(log_file, "a") as f:
         f.write(f"data_dir: {save_dir}\n")
@@ -737,6 +861,9 @@ class LoadedMultilabelDataset(Dataset):
         self.Sigma = _load("Sigma")
         self.hid_task_idx = _load("hid_task_idx")
         self.obs_task_idx = _load("obs_task_idx")
+        # Optional (absent in datasets saved before concepts_per_hid_task existed)
+        w_task_path = os.path.join(split_dir, "w_task_hid.pt")
+        self.w_task_hid = torch.load(w_task_path) if os.path.exists(w_task_path) else None
         self.n_samples = self.x.shape[0]
         self.num_classes = self.y.shape[1]
         self.num_hid_tasks = self.hid_task_idx.shape[0]

@@ -25,6 +25,23 @@ num_hid_tasks: 3
 num_obs_tasks: 1
 
 # --------------------------
+# Multi-concept hidden subtasks
+# --------------------------
+
+# Number of hidden concepts each hidden subtask depends on.
+#   1  -> current behaviour: one concept per subtask, subtask k's private term is
+#         residual_signal[:, hid_task_idx[k]] * |w_hid|. Backward compatible
+#         (identical RNG stream, identical labels for a given seed).
+#   >1 -> each subtask's private term is a signed weighted sum over M concepts,
+#         subsets drawn from ALL active hidden concepts (pool size =
+#         floor(task_sparsity_hid * hid_dim)), overlapping across tasks, with
+#         every pool concept covered by at least one task.
+#         Requires M <= pool size and num_hid_tasks * M >= pool size.
+# For the 7-concepts / 5-tasks design: task_sparsity_hid=0.35, hid_dim=20,
+# concepts_per_hid_task=2 (or 3), num_hid_tasks=5.
+concepts_per_hid_task: 1
+
+# --------------------------
 # Score mixing coefficients
 # --------------------------
 
@@ -51,6 +68,17 @@ task_sparsity_hid: 0.25 # Fraction of hidden concepts with nonzero task weight
 rho_cr: 0.0 # Cross-block correlation between observed and hidden concepts.
              # 0 = no correlation (recommended: keeps hidden concept directions orthogonal
              # to observed concepts, making recovery cleaner to interpret)
+
+cov_structure: lowrank # How the latent covariance is built.
+             #   lowrank -> legacy: rho's scale entries of a normalized rank-latent_rank
+             #              base matrix. Realized correlations are diluted (~1/sqrt(rank))
+             #              and the PSD repair caps realized mean |rho_cr| near 0.1
+             #              regardless of the nominal value. Mild correlations only.
+             #   paired  -> corr(eta_c_i, eta_r_i) = rho_cr EXACTLY for
+             #              i < min(obs_dim, hid_dim); hidden concepts i >= obs_dim stay
+             #              independent (built-in negative controls). Valid for any
+             #              |rho_cr| < 1; requires rho_cc = rho_rr = 0; ignores
+             #              latent_rank. Use for rho_cr stress tests.
 rho_cc: 0.0 # Within-block correlation for observed concepts.
              # 0 = independent observed concepts
 rho_rr: 0.0 # Within-block correlation for hidden concepts.
