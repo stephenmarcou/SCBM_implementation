@@ -703,6 +703,7 @@ def save_multilabel_data(config, train, val, test, log_file):
         f.write(f"min_weight_ratio : {train.min_weight_ratio}\n")
         f.write(f"data created for model at: {log_parent}\n")
         f.write(f"standardize : {train.standardize}\n")
+        f.write(f"latent_rank : {train.latent_rank}\n")
 
     with open(log_file, "a") as f:
         f.write(f"data_dir: {save_dir}\n")

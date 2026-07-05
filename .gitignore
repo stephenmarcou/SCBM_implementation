@@ -190,3 +190,4 @@ requirements_cluster.txt
 requirements_cluster_relaxed.txt
 datasets/cifar100/*
 plots/*
+papers/*
