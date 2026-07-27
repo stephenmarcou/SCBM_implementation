@@ -197,8 +197,11 @@ class MultilabelSyntheticResidualDataset(Dataset):
         self.standardize = config.data.standardize
         # 1 = single-concept subtasks (legacy path); >1 = multi-concept subtasks
         self.concepts_per_hid_task = config.data.get("concepts_per_hid_task", 1)
-        # "lowrank" (legacy) or "paired" (exact corr(eta_c_i, eta_r_i) = rho_cr)
+        # "lowrank" (legacy), "paired" (exact corr(eta_c_i, eta_r_i) = rho_cr), or
+        # "grouped" (one hidden concept <-> a group of cross_group_size observed
+        # concepts, exact corr = rho_cr per pair)
         self.cov_structure = config.data.get("cov_structure", "lowrank")
+        self.cross_group_size = config.data.get("cross_group_size", 1)
 
         assert self.num_hid_tasks >= 1, "num_hid_tasks must be >= 1"
         assert self.num_obs_tasks >= 1, "num_obs_tasks must be >= 1"
@@ -220,6 +223,7 @@ class MultilabelSyntheticResidualDataset(Dataset):
             rho_cr=self.rho_cr,
             rng=rng,
             cov_structure=self.cov_structure,
+            cross_group_size=self.cross_group_size,
         )
 
         # ----------------------------------------------------------------
@@ -348,36 +352,6 @@ class MultilabelSyntheticResidualDataset(Dataset):
 
 
 
-
-        # # Shared terms (computed once)
-        # shared_obs_score = concept_signal @ w_obs  # (n,)  alpha term for hid subtasks
-        # shared_hid_score = residual_signal @ w_hid  # (n,)  beta term for obs subtasks
-        
-        # def standardize(z, eps=1e-8):
-        #     return (z - z.mean()) / (z.std() + eps)
-
-        # if self.standardize:
-        #     pass
-        
-
-        # s_hid = np.zeros((n_samples, num_hid_tasks), dtype=np.float32)
-        # y_hid = np.zeros((n_samples, num_hid_tasks), dtype=np.float32)
-
-        # for k, idx in enumerate(hid_task_idx):
-        #     per_concept = residual_signal[:, idx] * float(np.abs(w_hid[idx]))
-        #     s_hid[:, k] = alpha * shared_obs_score + beta * per_concept
-        #     y_hid[:, k] = (s_hid[:, k] >= np.median(s_hid[:, k])).astype(np.float32)
-
-        # s_obs = np.zeros((n_samples, num_obs_tasks), dtype=np.float32)
-        # y_obs = np.zeros((n_samples, num_obs_tasks), dtype=np.float32)
-
-        # for j, idx in enumerate(obs_task_idx):
-        #     per_concept = concept_signal[:, idx] * float(np.abs(w_obs[idx]))
-        #     s_obs[:, j] = alpha * per_concept + beta * shared_hid_score
-        #     y_obs[:, j] = (s_obs[:, j] >= np.median(s_obs[:, j])).astype(np.float32)
-
-        # # Final label matrix: (n, K+J)
-        # y = np.concatenate([y_hid, y_obs], axis=1).astype(np.float32)
         
         
         
@@ -541,7 +515,7 @@ class MultilabelSyntheticResidualDataset(Dataset):
 # ---------------------------------------------------------------------------
 
 def _make_covariance(obs_dim, hid_dim, latent_rank, rho_cc, rho_rr, rho_cr, rng,
-                     cov_structure="lowrank"):
+                     cov_structure="lowrank", cross_group_size=1):
     """
     Build a positive-definite covariance matrix with controllable block structure.
 
@@ -562,6 +536,19 @@ def _make_covariance(obs_dim, hid_dim, latent_rank, rho_cc, rho_rr, rho_cr, rng,
             |rho_cr| < 1, no repair, realized = nominal. Hidden concepts with
             index >= obs_dim stay uncorrelated (negative controls). Ignores
             latent_rank; requires rho_cc = rho_rr = 0.
+        "grouped" — generalizes "paired" to many-to-one: hidden concept k (for
+            k < n_groups) is the hub of a disjoint group of `cross_group_size`
+            observed concepts, with corr(hub_k, obs_i) = rho_cr exactly for every
+            obs_i in its group. Equivalent to the one-factor model
+            obs_i = rho_cr * hid_k + sqrt(1-rho_cr^2) * eps_i, so it is PSD by
+            construction (no repair) for any |rho_cr| < 1. Side effect: obs
+            concepts sharing a hub are themselves correlated at rho_cr**2 (a
+            single shared factor can't give cross-correlation while keeping
+            same-block pairs exactly independent — see project notes). Hidden
+            concepts >= n_groups and observed concepts left over past
+            n_groups * cross_group_size stay independent (negative controls).
+            Ignores latent_rank; requires rho_cc = rho_rr = 0.
+            cross_group_size=1 reduces exactly to "paired".
     """
     total_dim = obs_dim + hid_dim
 
@@ -574,6 +561,25 @@ def _make_covariance(obs_dim, hid_dim, latent_rank, rho_cc, rho_rr, rho_cr, rng,
         for i in range(min(obs_dim, hid_dim)):
             Sigma[i, obs_dim + i] = rho_cr
             Sigma[obs_dim + i, i] = rho_cr
+        return Sigma.astype(np.float32)
+
+    if cov_structure == "grouped":
+        assert rho_cc == 0.0 and rho_rr == 0.0, (
+            "cov_structure='grouped' only controls the cross block; set rho_cc=rho_rr=0"
+        )
+        assert abs(rho_cr) < 1.0, "grouped covariance requires |rho_cr| < 1"
+        assert cross_group_size >= 1, "cross_group_size must be >= 1"
+        Sigma = np.eye(total_dim)
+        n_groups = min(hid_dim, obs_dim // cross_group_size)
+        for k in range(n_groups):
+            hub = obs_dim + k
+            group = list(range(k * cross_group_size, (k + 1) * cross_group_size))
+            for i in group:
+                Sigma[i, hub] = Sigma[hub, i] = rho_cr
+            for a in range(len(group)):
+                for b in range(a + 1, len(group)):
+                    i, j = group[a], group[b]
+                    Sigma[i, j] = Sigma[j, i] = rho_cr ** 2
         return Sigma.astype(np.float32)
 
     if latent_rank == 0:
@@ -769,6 +775,7 @@ def save_multilabel_data(config, train, val, test, log_file):
         + f"_standardize_{train.standardize}"
         + (f"_cpt_{train.concepts_per_hid_task}" if train.concepts_per_hid_task > 1 else "")
         + ("_paired" if train.cov_structure == "paired" else "")
+        + (f"_grouped{train.cross_group_size}" if train.cov_structure == "grouped" else "")
         + f"_seed_{config.seed}"
     )
 
@@ -828,6 +835,7 @@ def save_multilabel_data(config, train, val, test, log_file):
         f.write(f"latent_rank : {train.latent_rank}\n")
         f.write(f"concepts_per_hid_task : {train.concepts_per_hid_task}\n")
         f.write(f"cov_structure : {train.cov_structure}\n")
+        f.write(f"cross_group_size : {train.cross_group_size}\n")
 
     with open(log_file, "a") as f:
         f.write(f"data_dir: {save_dir}\n")

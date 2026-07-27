@@ -1,0 +1,64 @@
+seed: 0
+
+data:
+  data_path: "datasets/"
+
+  dataset: "multilabel_synthetic"
+  save_data: false
+  save_concept_and_residual_channel: false
+
+  # --------------------------
+  # Multi-label task structure
+  # --------------------------
+  num_hid_tasks: 5   # K, must be <= floor(task_sparsity_hid * hid_dim)
+  num_obs_tasks: 2   # J, must be <= floor(task_sparsity_obs * obs_dim)
+  concepts_per_hid_task: 1
+
+  # --------------------------
+  # Score mixing coefficients
+  # --------------------------
+  alpha: 1.0
+  beta: 1.0
+  standardize: true
+
+  # --------------------------
+  # Concept dependency structure
+  # --------------------------
+  task_sparsity_obs: 0.3
+  task_sparsity_hid: 0.25
+  rho_cr: 0.0
+  rho_cc: 0.0
+  rho_rr: 0.0
+  cov_structure: lowrank  # lowrank | paired | grouped
+  cross_group_size: 1     # only used when cov_structure=grouped
+
+  # --------------------------
+  # Input generation
+  # --------------------------
+  sigma_x: 0.5
+  latent_rank: 0
+  num_covariates: 100
+  min_weight_ratio: 0.4
+
+  # --------------------------
+  # Dataset size and split
+  # --------------------------
+  n_samples: 50000
+  train_ratio: 0.6
+  val_ratio: 0.2
+
+  # --------------------------
+  # Concept / residual dims
+  # --------------------------
+  obs_dim: 10
+  hid_dim: 20
+
+  # Model parameters (derived from dataset; must match obs_dim/hid_dim and K+J)
+  num_concepts: 10
+  num_residuals: 20
+  num_classes: 7
+
+  # --------------------------
+  # Data directory
+  # --------------------------
+  data_dir_name: null

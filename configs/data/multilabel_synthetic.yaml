@@ -79,6 +79,20 @@ cov_structure: lowrank # How the latent covariance is built.
              #              independent (built-in negative controls). Valid for any
              #              |rho_cr| < 1; requires rho_cc = rho_rr = 0; ignores
              #              latent_rank. Use for rho_cr stress tests.
+             #   grouped -> generalizes paired to many-to-one: hidden concept k
+             #              (k < n_groups) is a hub correlated EXACTLY at rho_cr with
+             #              every observed concept in its dedicated group of
+             #              cross_group_size concepts (see cross_group_size below).
+             #              Side effect: observed concepts sharing a hub are
+             #              correlated with each other at rho_cr**2. Valid for any
+             #              |rho_cr| < 1; requires rho_cc = rho_rr = 0; ignores
+             #              latent_rank. cross_group_size=1 is identical to "paired".
+
+cross_group_size: 1 # Only used when cov_structure="grouped". Number of observed
+             # concepts sharing each hidden hub concept. n_groups =
+             # min(hid_dim, obs_dim // cross_group_size) hidden concepts become hubs;
+             # remaining hidden/observed concepts stay independent (negative controls).
+
 rho_cc: 0.0 # Within-block correlation for observed concepts.
              # 0 = independent observed concepts
 rho_rr: 0.0 # Within-block correlation for hidden concepts.
