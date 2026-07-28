@@ -172,6 +172,7 @@ multirun/
 
 ### I added
 datasets/multiclass_synthetic/*
+datasets/multilabel_synthetic_old/*
 datasets/multilabel_synthetic/*
 datasets/synthetic_res_scbm_old/*
 datasets/CUB/*

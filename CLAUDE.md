@@ -117,9 +117,16 @@ and the positive-definiteness repairs).
 ## 5. Codebase Components
 
 - `multilabel_synthetic_dataset.py` — generative process described in §3
-- `multilabel_analysis.ipynb` — primary analysis notebook (ICA, probes, PCA/SVD,
-  covariance diagnostics; since 2026-07-05 also the **task-head readout + ΔAUC gate**
-  section — the primary discovery pipeline, inserted after the cleaned-residual ICA)
+- `sparse_atom.ipynb` — supervised sparse-dictionary alternative to the task-head
+  readout: `SupervisedSparseAtoms` learns a shared residual dictionary `V` (r_dim×m,
+  unit-norm columns) plus per-task weights `B` (atom→task, L1-penalized) and `W_c`
+  (concept→task, unpenalized), trained end-to-end on multilabel BCE plus an
+  off-diagonal decorrelation penalty on atom activations `z = Vᵀr`. Atom↔hidden-concept
+  alignment scored via sign-invariant AUC + Hungarian matching (train-set matching
+  only, to avoid double-dipping on test-set AUCs). Also has a **Multi-experiment comparison** section
+  (`load_experiment` / `run_full_experiment`) that reruns probes + `c_mu` predictive
+  power + sparse-atom fit + test metrics across a list of saved run folders side by
+  side (used for the β sweep in §8).
 - `eval_datasets.py`
 - `SCBLoss` / `SCBresLoss` — concept and residual loss implementations
 - `FCNNEncoder`
@@ -258,39 +265,40 @@ Status 2026-07-05: **Layer 1 is validated** (see below); the open fronts are the
 `ρ_cr > 0` stress test (Layer 2) and a multi-concept-tasks dataset variant that makes
 the discovery claim non-trivial.
 
-### Established findings (validated across all 10 local runs, 2026-07-05)
 
-- The residual channel collapses to **~K+1 effective dimensions** (K concepts + 1
-  background direction; confirmed via SVD).
-- Distributed linear probes recover task-relevant hidden concepts selectively (non-task
-  concepts near chance ~0.57). Probe ceiling depends on σ_x: ~0.95 (β=0, σ=0.01),
-  ~0.87 (β=1, σ=0.01), ~0.75 (σ=0.5, any β). MLP(x→hidden) info ceiling at σ_x=0.5 is
-  only ~0.81, so ~0.75 is near the encoder ceiling.
-- **σ_x is confirmed the stronger lever than β**: it both lowers the information
-  ceiling and Gaussianizes `μ_r(x)` (posterior-mean shrinkage), which selectively
-  destroys FastICA's non-Gaussianity requirement while probes degrade gracefully.
-- **The raw-ICA failure at σ_x=0.5 is NOT background-driven**: it occurs at *all* β
-  values including β=0 (concept 14 stuck at AUC ~0.54), and oracle removal of the
-  scalar `a_c_n` does **not** fix it. The blocker is **observed-concept leakage** into
-  the residual channel (extra nuisance sources for ICA).
-- **`c_mu` residualization (Layer 1) is validated and strictly better than the
-  oracle**: OLS-regressing `res_mu` on the 10-dim `c_mu` removes background *and*
-  leakage at once. Cleaned ICA achieves **5/5 discovery in every condition** (mean
-  matched test AUC 0.745 at β=1/σ=0.5 vs probe ceiling 0.751). This supersedes the
-  earlier "oracle-based confound removal validated" note.
-- **Task-head readout** (per hidden task, logistic probe from the `c_mu`-cleaned
-  residual to `y_k`; one *labeled* direction per task, no Hungarian matching): 5/5 at
-  the probe ceiling in every condition (0.749 at β=1/σ=0.5; 0.819 at β=1/σ=0.01;
-  0.948 at β=0/σ=0.01). Raw (uncleaned) readout fails at β=1/σ=0.5 (0/5, 0.660).
-- **ΔAUC gate**: AUC of `y_k` from `[c_mu, res_mu]` minus `c_mu`-only cleanly flags
-  residual-driven tasks at β=0 (hidden Δ≈+0.19..+0.45, observed Δ≈0). Caveat: at β=1
-  observed tasks also gain (~+0.15) because `y_obs` contains the hidden background
-  `a_r` — the gate detects *residual-dependent*, not *hidden-concept* per se.
-- **Raw-ICA discovery counts are run-to-run unstable**: two independent trainings of
-  the identical β=1/σ=0.01 config flip between 3/5 and 4/5. Report mean matched AUC
-  (and multi-seed error bars), not single-run discovery counts.
-- Standard **SAEs remain inappropriate** — no superposition with 20 residual dims
-  encoding ~5 concepts.
+- **β sweep at σ_x=0.01, ρ_cr=0** (`sparse_atom.ipynb` multi-experiment comparison,
+  2026-07-27; β ∈ {0, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0}, 7 runs): increasing β degrades
+  **unsupervised** sparse-atom discovery of hidden concepts (mean matched atom AUC
+  0.946→0.759) much more steeply than the **supervised** distributed probe on raw
+  `res_mu` (task-bit AUC 0.948→0.872, a ~0.08 drop; non-task-bit concepts stay flat at
+  chance ~0.58 throughout). Confirms unsupervised separability is more
+  background-sensitive than raw recoverability, consistent with the K+1-effective-dim
+  finding (β grows the shared background mode that competes with the K genuine
+  directions for the sparse code's capacity). Also reproduces the ΔAUC-gate
+  miscalibration from `layer2-rho-cr-first-result` **even at ρ_cr=0**: `c_mu`-only AUC
+  for hidden tasks rises 0.511→0.778 as β increases (the shared observed-context term
+  `a_c_n` leaks into `c_mu`), while `c_mu`-only AUC for observed tasks falls
+  0.971→0.764 (the shared hidden-context term `a_r_n` lives in the residual) — so the
+  gate's observed-task Δ rises from −0.001 to 0.221 purely from background mixing, not
+  from ρ_cr>0.
+
+### Sparse-atom decomposition — why separation isn't clean
+
+`sparse_atom.ipynb`'s `SupervisedSparseAtoms` fits its residual dictionary `V` on the
+**raw, standardized `res_mu`** — the concept path (`c @ W_c`) is only an additive term
+in the task logits (`forward()`: `z = r @ V`, `logits = c @ W_c + z @ B + b`); `r` is
+never residualized on `c_mu` before the dictionary is learned. This likely explains the
+steep mean-matched-AUC decline with β (0.946→0.759, above): the shared background mode
+that grows with β competes for atom capacity directly in the raw residual — the same
+geometry problem that made raw ICA fail before `c_mu`-cleaning was introduced (see
+`cmu-cleaning-rescues-ica` in memory). Evidence this is a geometry problem rather than
+an information ceiling: the raw supervised probe on the same `res_mu` barely degrades
+over the same β range (0.948→0.872) — if the hidden-concept information were simply
+harder to extract at high β, both metrics would degrade together, not just the
+unsupervised one. **Next experiment**: OLS-residualize `res_mu` on `c_mu` (the
+validated Layer-1 cleaning step) before fitting the sparse-atom dictionary, and check
+whether `mean_matched_auc` recovers toward the raw-probe ceiling the way cleaned ICA
+did.
 
 ### Interpretation guardrail: readout ≠ discovery
 
@@ -302,95 +310,7 @@ supervised bound). Roles: readout = supervised ceiling + task attribution + gate
 cleaned ICA = the actual unsupervised discovery step (and the only one that can find
 task-irrelevant hidden structure).
 
-### Two-layer generalizable design — status
 
-- **Layer 1 (validated)**: OLS-regress `res_mu` on `c_mu`; removes ~50% of `res_mu`
-  variance at β=1/σ=0.5 with no loss of hidden-concept information (probe AUCs
-  unchanged). Safe **only because ρ_cr = 0** — nothing predictable from `c_mu` can
-  contain hidden signal.
-- **Layer 2 (open)**: per-concept gate (R² of hidden signal explained by `c_mu`) to
-  flag when removal is unsafe (`ρ_cr > 0`). Candidate softer policies to compare in the
-  ρ_cr sweep: partial cleaning (remove only top-k principal directions of the
-  `c_mu`-predicted component; background is ~rank-1), capped INLP, shrinkage.
-
-### Next experiments (priority order)
-
-1. **Multi-concept tasks variant** — each hidden task depends on 2–3 overlapping hidden
-   concepts (more task-relevant concepts than tasks). Breaks the 1:1 task↔concept
-   construction; the cleaned-ICA heatmap is the verdict plot (readout is *expected* to
-   smear). Either outcome is a result: ICA separates → discovery claim survives; ICA
-   smears → motivates auxiliary-variable nonlinear ICA (iVAE / Hyvärinen-style with `y`
-   or `c_mu` as auxiliary).
-2. **ρ_cr sweep** (Layer-2 validation): ρ_cr ∈ {0, 0.25, 0.5, 0.75} × β ∈ {0, 1} at
-   σ_x=0.01, **`data.latent_rank=10`** (see §3 trap), ρ_cc=ρ_rr=0, 2–3 seeds. Measure:
-   damage curve (per-concept probe AUC raw vs cleaned), gate calibration (R² vs
-   damage), cleaning policies (none / full OLS / top-k partial / capped INLP), and the
-   conditional baseline (hidden-concept AUC from `c_mu` alone — credit the residual
-   only with the increment).
-3. **Multi-seed replication** of the β × σ_x grid (seeds 1–3; seed 0 exists). An
-   18-run local attempt on 2026-07-05 was stopped; submit via sbatch instead. Seed-1
-   datasets are already generated under `datasets/multilabel_synthetic/local_..._seed_1/`.
-
-**Critical design constraint** (unchanged): the safety guarantee (`ρ_cr = 0`) is
-specific to the synthetic dataset and will **not** generalize to real-world structure.
-The priority is a pipeline that works when that guarantee doesn't hold.
-
-### Active covariance evaluation work
-
-`validate_one_epoch_scbm_residual` currently returns an **average** covariance matrix,
-which risks sign cancellation and conflates `E_x[Σ(x)]` with `Cov_x[μ(x)]`. The full
-decomposition is needed:
-
-```
-Cov(η) = E_x[Σ(x)] + Cov_x[μ(x)]
-```
-
-Highest-priority diagnostics: elementwise cancellation checks, and stratified averaging
-conditioned on hidden task labels.
-
-
-
----
-
-## 9. Key Principles (methodological)
-
-- **PCA variance concentration is a poor proxy for ICA recoverability** — these can
-  point in opposite directions (β=0.5 has *lower* top-5 variance concentration than
-  β=1, but *better* ICA recovery). Don't use PCA variance concentration as the headline
-  diagnostic for discoverability.
-- **Hungarian assignment for concept-to-axis matching must be computed on
-  training-set AUCs only**, then applied to held-out test data. Using test-set AUCs for
-  both matching and scoring is circular analysis (double-dipping).
-- **The shared background problem arises from task-score aggregation downstream, not
-  from generative correlations** — setting ρ values to 0 does not eliminate it.
-- **SNR asymmetry**: observed tasks underperform hidden tasks because the shared
-  background term sums over more weights for hidden tasks than observed tasks, making
-  per-concept signal harder to detect for observed tasks.
-- Axis 6 mixed loading at β=1 is a **representational rotation artifact**, not genuine
-  source entanglement (`a_c_n` is orthogonal to hidden concept signals).
-- **Cleaning unmasks, it doesn't retrieve**: the hidden-concept information is already
-  in `res_mu` (probes on the raw residual hit the ceiling); `c_mu`-cleaning fixes the
-  *geometry* so direction-based methods (ICA, readout) can isolate concepts. Cleaning
-  never lifts recovery above the probe ceiling set by σ_x.
-- **Report mean matched AUC, not discovery counts**, as the headline metric — discovery
-  counts (>0.7 threshold) flip between identical re-trainings of the same config.
-- **Verify configs from the run's own `log.txt` / dataset `info.txt`**, never from
-  folder names, when comparing across experiments (and dedupe byte-identical run
-  folders by (β, σ_x, seed)).
-
----
-
-## 10. Approach & Patterns
-
-- Iterative experimental design: sweep parameters (β, σ_x) → analyze in Jupyter →
-  identify failure modes → fix → re-run.
-- **Unsupervised discovery → supervised evaluation separation**: fit ICA on activations
-  only; use ground-truth hidden concepts strictly for post-hoc validation.
-- **Oracle-first, then generalize**: establish what's achievable with ground-truth
-  access before designing methods that don't require it.
-- Notebook hygiene: watch for stale-cache bugs (e.g. duplicate/uncommented
-  `EXPERIMENT_PATH` assignments silently overwriting results) — check cell execution
-  order carefully.
 
 ---
 
@@ -415,7 +335,7 @@ conditioned on hidden task labels.
 - Abid et al. — contrastive PCA
 - Chen et al. — Concept Whitening
 - Kriegeskorte et al., 2009 — circular analysis (relevant to the Hungarian-matching
-  caveat in §9)
+  caveat in §5: match on train-set AUCs only)
 - Ravfogel et al., ACL 2020 — INLP (iterative nullspace projection; principled,
   rank-controlled version of Layer-1 cleaning)
 - Elazar et al., TACL 2021 — amnesic probing
