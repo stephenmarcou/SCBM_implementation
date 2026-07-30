@@ -445,7 +445,7 @@ class SCBM_residual(nn.Module):
         
         
         # Use sparsity loss
-        self.residual_sparsity_weight = config.residual_sparsity_weight
+        self.residual_sparsity_weight = config_model.residual_sparsity_weight
         
         
         
