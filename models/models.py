@@ -292,9 +292,9 @@ class SCBM(nn.Module):
         else:
             return c_mcmc_prob, c_triang_cov, y_pred_logits
 
-    def compute_y_pred_logits(self, c_mcmc_probs, c_mcmc_logits):
+    def compute_y_pred_logits(self, c_mcmc, c_mcmc_logits):
         # Pick the concept tensor: [B, C, M]
-        x = c_mcmc_probs if self.concept_learning == "hard" else c_mcmc_logits
+        x = c_mcmc if self.concept_learning == "hard" else c_mcmc_logits
         B, C, M = x.shape
 
         # Run the head over all M samples at once: reshape to [B*M, C]
@@ -442,6 +442,11 @@ class SCBM_residual(nn.Module):
         self.init_temp = 1.0
         self.final_temp = 0.5
         self.temp_decay_rate = (math.log(self.final_temp) - math.log(self.init_temp)) / float(self.num_epochs)
+        
+        
+        # Use sparsity loss
+        self.residual_sparsity_weight = config.residual_sparsity_weight
+        
         
         
         # Regression or multilabel model
@@ -727,15 +732,23 @@ class SCBM_residual(nn.Module):
     
 
 
-    def compute_y_pred_logits(self, c_res_mcmc_probs, c_res_mcmc_logits):
+    def compute_y_pred_logits(self, c_res_mcmc, c_res_mcmc_logits):
         """
-        c_res_mcmc_probs: [B, C+R, M] is actually the bernoulli sampled concepts+residuals
+        c_res_mcmc: [B, C+R, M] is actually the bernoulli sampled concepts+residuals
+        """
+        if self.residual_sparsity_weight > 0 and self.concept_learning != "hard":
+            raise ValueError(
+                "residual_sparsity_weight > 0 requires concept_learning='hard'; in soft mode "
+                "the head consumes logits, where sigmoid is a bijection and the penalty only "
+                "translates them."
+            )
         
         
-        """
+        
+        
         # Pick the concept tensor: [B, C, M]
-        # if Straight-Through Gumbel Softmax then c_res_mcmc_probs approximately binary
-        x = c_res_mcmc_probs if self.concept_learning == "hard" else c_res_mcmc_logits
+        # if Straight-Through Gumbel Softmax then c_res_mcmc approximately binary
+        x = c_res_mcmc if self.concept_learning == "hard" else c_res_mcmc_logits
         B, C, M = x.shape
         
         

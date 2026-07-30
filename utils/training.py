@@ -96,6 +96,7 @@ def train_one_epoch_scbm_residual(
         ) = model(batch_features, epoch, c_true=concepts_true, return_L_int_extension=True)
         
         concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
+        residual_mcmc_probs = concepts_residuals_mcmc_probs[:, config.data.num_concepts:, :]
 
         # Backward pass depends on the training mode of the model
         optimizer.zero_grad()
@@ -110,12 +111,13 @@ def train_one_epoch_scbm_residual(
                 
 
         # Compute the loss
-        target_loss, concepts_loss, prec_loss, total_loss = loss_fn(
+        target_loss, concepts_loss, prec_loss, sparsity_loss, total_loss = loss_fn(
             concepts_mcmc_probs,
             concepts_true,
             target_pred_logits,
             target_true,
             triang_cov,
+            residual_mcmc_probs=residual_mcmc_probs
         )
         
         # Intervene on concepts to get L_int loss
@@ -496,6 +498,7 @@ def validate_one_epoch_scbm_residual(
             ) = model(batch_features, epoch, c_true=concepts_true, return_L_int_extension=True)
                 
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
+            residual_mcmc_probs = concepts_residuals_mcmc_probs[:, config.data.num_concepts:, :]
             
              # Compute covariance matrix of concepts
             cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
@@ -538,12 +541,13 @@ def validate_one_epoch_scbm_residual(
                 
                 
             
-            target_loss, concepts_loss, prec_loss, total_loss = loss_fn(
+            target_loss, concepts_loss, prec_loss, sparsity_loss, total_loss = loss_fn(
                 concepts_mcmc_probs,
                 concepts_true,
                 target_pred_logits,
                 target_true,
                 triang_cov,
+                residual_mcmc_probs=residual_mcmc_probs
             )
             
             # Intervene on concepts to get L_int loss

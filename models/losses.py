@@ -285,6 +285,9 @@ class SCBresLoss(nn.Module):
 
         self.log_num_mc = math.log(config.num_monte_carlo)
         self.alpha = alpha if config.training_mode == "joint" else 1.0
+        
+        self.residual_sparsity_weight = config.residual_sparsity_weight
+        self.target_active_residuals = config.target_active_residuals
 
     def forward(
         self,
@@ -294,6 +297,7 @@ class SCBresLoss(nn.Module):
         target_true: Tensor,
         c_triang_cov: Tensor,
         cov_not_triang=False,
+        residual_mcmc_probs: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Compute the loss.
@@ -359,11 +363,24 @@ class SCBresLoss(nn.Module):
             prec_loss = self.reg_weight * prec_loss.mean(-1)
         else:
             prec_loss = torch.zeros_like(concepts_loss)
+            
+            
+        if self.residual_sparsity_weight > 0:
+            if residual_mcmc_probs is None:
+                raise ValueError("residual_mcmc_probs required when residual_sparsity_weight > 0")
+            # residual_mcmc_probs: [B, R, M]
+            count = residual_mcmc_probs.sum(dim=1)                    # [B, M] expected #active
+            sparsity_loss = self.residual_sparsity_weight * \
+                            F.relu(count - self.target_active_residuals).square().mean()
+        else:
+            sparsity_loss = target_loss.new_zeros(())
 
-        total_loss = target_loss + concepts_loss + prec_loss
 
-        return target_loss, concepts_loss, prec_loss, total_loss
         
+
+        total_loss = target_loss + concepts_loss + prec_loss + sparsity_loss
+
+        return target_loss, concepts_loss, prec_loss, sparsity_loss, total_loss
 
     def compute_L_int_loss(
         self,

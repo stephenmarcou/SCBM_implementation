@@ -34,3 +34,5 @@ L_int_loss_weight: 1 # Weight of the L_int loss if use_L_int_loss is True
 use_L_int_extension_loss: False # Whether to use the L_int extension loss as defined in the paper [True, False] 
 L_int_extension_loss_weight: 1 # Weight of the L_int extension loss if use_L_int_extension_loss is True
 half_intervention_l_int_extension_loss: False 
+residual_sparsity_weight: 0.0 # Weight of the residual sparsity loss if > 0.0, requires concept_learning='hard'
+target_active_residuals: 5 # Target number of active residuals for the residual sparsity loss if > 0.0, requires concept_learning='hard'

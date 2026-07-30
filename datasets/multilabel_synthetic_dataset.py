@@ -303,19 +303,46 @@ class MultilabelSyntheticResidualDataset(Dataset):
             # task_sparsity_hid and can exceed K (concepts != tasks).
             M = self.concepts_per_hid_task
             pool = rng.permutation(np.flatnonzero(w_hid))          # (P,) shuffled
+            
+            
+            P = len(pool)
 
-            # Coverage first: deal every pool concept round-robin into a task,
-            # so each concept is used by at least one subtask.
-            subsets = [list(pool[k::self.num_hid_tasks]) for k in range(self.num_hid_tasks)]
+            if M == 2 and self.num_hid_tasks == P:
+                # Cycle design:
+                # - every pair is unique
+                # - every concept appears in exactly two tasks
+                # - no duplicate task combinations
+                subsets = [
+                    np.sort(
+                        np.array(
+                            [pool[k], pool[(k + 1) % P]],
+                            dtype=np.int64,
+                        )
+                    )
+                    for k in range(P)
+                ]
 
-            # Then fill each subset up to M with concepts it doesn't already
-            # contain — these repeats are what create the overlap between tasks.
-            for k in range(self.num_hid_tasks):
-                candidates = np.setdiff1d(pool, subsets[k])
-                extra = rng.choice(candidates, size=M - len(subsets[k]), replace=False)
-                subsets[k] = np.sort(np.concatenate([subsets[k], extra]).astype(np.int64))
+                hid_task_idx = np.stack(subsets)  # (K, 2)
+                    
+            
+            
+            
+            else:
+                # Coverage first: deal every pool concept round-robin into a task,
+                # so each concept is used by at least one subtask.
+                subsets = [list(pool[k::self.num_hid_tasks]) for k in range(self.num_hid_tasks)]
+                
 
-            hid_task_idx = np.stack(subsets)                        # (K, M)
+                
+
+                # Then fill each subset up to M with concepts it doesn't already
+                # contain — these repeats are what create the overlap between tasks.
+                for k in range(self.num_hid_tasks):
+                    candidates = np.setdiff1d(pool, subsets[k])
+                    extra = rng.choice(candidates, size=M - len(subsets[k]), replace=False)
+                    subsets[k] = np.sort(np.concatenate([subsets[k], extra]).astype(np.int64))
+
+                hid_task_idx = np.stack(subsets)                        # (K, M)
 
             # Per-(task, concept) mixing weights: same magnitude scheme as
             # _make_sparse_weights (uniform 0.5..1 with a min-ratio floor within
