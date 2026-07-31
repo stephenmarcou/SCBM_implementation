@@ -6,10 +6,10 @@ defaults:
   - data_defaults # Inherit data_defaults arguments
 dataset: 'synthetic_res_scbm' # Name of the dataset
 save_data: false # Whether to save the generated dataset to disk 
-#save_predicted_concepts_residuals: false # Whether to save the residuals and concepts for each data point, only applicable for synthetic dataset
+
 save_residual_channel: false
 save_concept_and_residual_channel: false # Whether to save the predicted concepts and residuals for each data point, only applicable for synthetic dataset
-
+save_raw_mc_samples: false
 
 # Data generation parameters
 alpha: 1.0 # Weight of the observed concept component in the label generation process

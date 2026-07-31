@@ -460,10 +460,12 @@ def validate_one_epoch_scbm_residual(
     concepts_residual_prob_std_list = []
     concepts_residual_mean_list = []
     concepts_residual_std_list = []
-    
+    concepts_residuals_logits_mean_list = []
+    concepts_residuals_logits_std_list = []
     c_res_mu_list = []
     
     y_pred_list = []
+    y_true_list = []
     
     cov_matrix_sum = None
     cov_matrix_count = 0
@@ -495,7 +497,7 @@ def validate_one_epoch_scbm_residual(
                 triang_cov,
                 target_pred_logits,
                 c_res_mu,
-            ) = model(batch_features, epoch, c_true=concepts_true, return_L_int_extension=True)
+            ) = model(batch_features, epoch, validation=True, c_true=concepts_true, return_L_int_extension=True)
                 
             concepts_mcmc_probs = concepts_residuals_mcmc_probs[:, :config.data.num_concepts, :]
             residual_mcmc_probs = concepts_residuals_mcmc_probs[:, config.data.num_concepts:, :]
@@ -509,6 +511,8 @@ def validate_one_epoch_scbm_residual(
 
                 concepts_residuals_mcmc_detached = concepts_residuals_mcmc.detach()
                 
+                concepts_residuals_mcmc_logits_detached = concepts_residuals_mcmc_logits.detach()
+                
                 c_res_mu_detached = c_res_mu.detach()
                 
                 c_res_mu_list.append(c_res_mu_detached.cpu())
@@ -516,8 +520,13 @@ def validate_one_epoch_scbm_residual(
                 concepts_residuals_pred_probs = concepts_residuals_mcmc_probs_detached.mean(dim=-1)
                 concepts_residuals_prob_std = concepts_residuals_mcmc_probs_detached.std(dim=-1, unbiased=False)
                 
+                
                 concepts_residuals_sample_mean = concepts_residuals_mcmc_detached.float().mean(dim=-1)
                 concepts_residuals_sample_std = concepts_residuals_mcmc_detached.float().std(dim=-1, unbiased=False)
+                
+                concepts_residuals_logits_mean = concepts_residuals_mcmc_logits_detached.float().mean(dim=-1)
+                concepts_residuals_logits_std = concepts_residuals_mcmc_logits_detached.float().std(dim=-1, unbiased=False)
+                
                 
                 concepts_residual_probs_mean_list.append(concepts_residuals_pred_probs.cpu())
                 concepts_residual_prob_std_list.append(concepts_residuals_prob_std.cpu())
@@ -525,7 +534,11 @@ def validate_one_epoch_scbm_residual(
                 concepts_residual_mean_list.append(concepts_residuals_sample_mean.cpu())
                 concepts_residual_std_list.append(concepts_residuals_sample_std.cpu())
                 
+                concepts_residuals_logits_mean_list.append(concepts_residuals_logits_mean.cpu())
+                concepts_residuals_logits_std_list.append(concepts_residuals_logits_std.cpu())
+                
                 y_pred_list.append(target_pred_logits.cpu())
+                y_true_list.append(target_true.cpu())
                 
                 sigma_mean_batch = cov.mean(dim=0).cpu() #[C+R, C+R]
                 if cov_matrix_sum is None:
@@ -626,8 +639,11 @@ def validate_one_epoch_scbm_residual(
         concepts_residuals_std_tensor = torch.cat(concepts_residual_std_list, dim=0)
         concepts_residuals_probs_mean_tensor = torch.cat(concepts_residual_probs_mean_list, dim=0)
         concepts_residuals_probs_std_tensor = torch.cat(concepts_residual_prob_std_list, dim=0)
+        concepts_residuals_logits_mean_tensor = torch.cat(concepts_residuals_logits_mean_list, dim=0)
+        concepts_residuals_logits_std_tensor = torch.cat(concepts_residuals_logits_std_list, dim=0)
         c_res_mu_tensor = torch.cat(c_res_mu_list, dim=0)
         y_pred_tensor = torch.cat(y_pred_list, dim=0)
+        y_true_tensor = torch.cat(y_true_list, dim=0)
 
         parent_dir_path = os.path.dirname(log_file)
         full_path = os.path.join(parent_dir_path, save_residual_meta_data_folder)
@@ -640,8 +656,11 @@ def validate_one_epoch_scbm_residual(
         save_path_concepts_residual_std = os.path.join(full_path, "concepts_residuals_sample_std.pt")
         save_path_concepts_residual_probs_mean = os.path.join(full_path, "concepts_residuals_pred_probs_mean.pt")
         save_path_concepts_residual_probs_std = os.path.join(full_path, "concepts_residuals_pred_probs_std.pt")
+        save_path_concepts_residuals_logits_mean = os.path.join(full_path, "concepts_residuals_logits_mean.pt")
+        save_path_concepts_residuals_logits_std = os.path.join(full_path, "concepts_residuals_logits_std.pt")
         save_path_c_res_mu = os.path.join(full_path, "c_res_mu.pt")
         save_path_y_pred = os.path.join(full_path, "y_pred.pt")
+        save_path_y_true = os.path.join(full_path, "y_true.pt")
         
         cov_matrix_avg = cov_matrix_sum / cov_matrix_count  # [C+R, C+R]
         save_path_cov = os.path.join(full_path, "avg_covariance_matrix.pt")
@@ -652,17 +671,25 @@ def validate_one_epoch_scbm_residual(
         torch.save(concepts_residuals_std_tensor, save_path_concepts_residual_std)
         torch.save(concepts_residuals_probs_mean_tensor, save_path_concepts_residual_probs_mean)
         torch.save(concepts_residuals_probs_std_tensor, save_path_concepts_residual_probs_std)
+        torch.save(concepts_residuals_logits_mean_tensor, save_path_concepts_residuals_logits_mean)
+        torch.save(concepts_residuals_logits_std_tensor, save_path_concepts_residuals_logits_std)
         torch.save(c_res_mu_tensor, save_path_c_res_mu)
         torch.save(y_pred_tensor, save_path_y_pred)
+        torch.save(y_true_tensor, save_path_y_true)
         torch.save(cov_matrix_avg, save_path_cov)
 
         print(f"Saved concepts residuals means to {save_path_concepts_residual_mean}")
         print(f"Saved concepts residuals stds to {save_path_concepts_residual_std}")
         print(f"Saved concepts residuals predicted probabilities means to {save_path_concepts_residual_probs_mean}")
         print(f"Saved concepts residuals predicted probabilities stds to {save_path_concepts_residual_probs_std}")
+        print(f"Saved concepts residuals logits means to {save_path_concepts_residuals_logits_mean}")
+        print(f"Saved concepts residuals logits stds to {save_path_concepts_residuals_logits_std}")
+        
         print(f"Saved c_res_mu to {save_path_c_res_mu}")
         print(f"Saved y_pred to {save_path_y_pred}")
+        print(f"Saved y_true to {save_path_y_true}")
         print(f"Saved average covariance matrix to {save_path_cov}")
+        
     
     
     
