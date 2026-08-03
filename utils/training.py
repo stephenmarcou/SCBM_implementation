@@ -718,6 +718,8 @@ def validate_one_epoch_scbm(
     test=False,
     concept_names_graph=None,
     log_file=None,
+    save_concept_meta_data_folder=None,
+    metrics_only_for_saving=False,
     **kwargs
 ):
     """
@@ -750,6 +752,20 @@ def validate_one_epoch_scbm(
     """
     model.eval()
 
+    # Metadata lists to store concept predictions for saving
+    concepts_pred_probs_mean_list = []
+    concepts_pred_probs_std_list = []
+    concepts_sample_mean_list = []
+    concepts_sample_std_list = []
+    concepts_logits_mean_list = []
+    concepts_logits_std_list = []
+    c_mu_list = []
+
+    y_pred_list = []
+    y_true_list = []
+
+    cov_matrix_sum = None
+    cov_matrix_count = 0
 
     with torch.no_grad():
 
@@ -760,8 +776,15 @@ def validate_one_epoch_scbm(
                 "labels"
             ].to(device)
             concepts_true = batch["concepts"].to(device)
-            concepts_mcmc_probs, triang_cov, target_pred_logits = model(
-                batch_features, epoch, validation=True, c_true=concepts_true
+            (
+                concepts_mcmc_probs,
+                concepts_mcmc,
+                concepts_mcmc_logits,
+                triang_cov,
+                target_pred_logits,
+                c_mu,
+            ) = model(
+                batch_features, epoch, validation=True, c_true=concepts_true, return_samples=True
             )
             # Compute covariance matrix of concepts
             cov = torch.matmul(triang_cov, torch.transpose(triang_cov, dim0=1, dim1=2))
@@ -781,9 +804,44 @@ def validate_one_epoch_scbm(
 
                 except:
                     pass
-            
-            
-            
+
+            # Save the concept channel
+            if config.data.save_concept_and_residual_channel and save_concept_meta_data_folder:
+                concepts_mcmc_probs_detached = concepts_mcmc_probs.detach()
+                concepts_mcmc_detached = concepts_mcmc.detach()
+                concepts_mcmc_logits_detached = concepts_mcmc_logits.detach()
+                c_mu_detached = c_mu.detach()
+
+                c_mu_list.append(c_mu_detached.cpu())
+
+                concepts_pred_probs_mean = concepts_mcmc_probs_detached.mean(dim=-1)
+                concepts_pred_probs_std = concepts_mcmc_probs_detached.std(dim=-1, unbiased=False)
+
+                concepts_sample_mean = concepts_mcmc_detached.float().mean(dim=-1)
+                concepts_sample_std = concepts_mcmc_detached.float().std(dim=-1, unbiased=False)
+
+                concepts_logits_mean = concepts_mcmc_logits_detached.float().mean(dim=-1)
+                concepts_logits_std = concepts_mcmc_logits_detached.float().std(dim=-1, unbiased=False)
+
+                concepts_pred_probs_mean_list.append(concepts_pred_probs_mean.cpu())
+                concepts_pred_probs_std_list.append(concepts_pred_probs_std.cpu())
+
+                concepts_sample_mean_list.append(concepts_sample_mean.cpu())
+                concepts_sample_std_list.append(concepts_sample_std.cpu())
+
+                concepts_logits_mean_list.append(concepts_logits_mean.cpu())
+                concepts_logits_std_list.append(concepts_logits_std.cpu())
+
+                y_pred_list.append(target_pred_logits.cpu())
+                y_true_list.append(target_true.cpu())
+
+                sigma_mean_batch = cov.mean(dim=0).cpu()  # [C, C]
+                if cov_matrix_sum is None:
+                    cov_matrix_sum = sigma_mean_batch
+                else:
+                    cov_matrix_sum += sigma_mean_batch
+                cov_matrix_count += 1
+
             target_loss, concepts_loss, prec_loss, total_loss = loss_fn(
                 concepts_mcmc_probs,
                 concepts_true,
@@ -808,25 +866,73 @@ def validate_one_epoch_scbm(
     # Calculate and log metrics
     metrics_dict = metrics.compute(validation=True, config=config)
 
-    if not test:
-        wandb.log({f"validation/{k}": v for k, v in metrics_dict.items()})
-        prints = f"Epoch {epoch}, Validation: "
-    else:
-        wandb.log({f"test/{k}": v for k, v in metrics_dict.items()})
-        prints = f"Test: "
-    for key, value in metrics_dict.items():
-        prints += f"{key}: {value:.3f} "
-    
-    if log_file is not None:
-        with open(log_file, "a") as f:
-            f.write(prints + "\n")
+    if not metrics_only_for_saving:
+        if not test:
+            wandb.log({f"validation/{k}": v for k, v in metrics_dict.items()})
+            prints = f"Epoch {epoch}, Validation: "
+        else:
+            wandb.log({f"test/{k}": v for k, v in metrics_dict.items()})
+            prints = f"Test: "
+        for key, value in metrics_dict.items():
+            prints += f"{key}: {value:.3f} "
 
+        if log_file is not None:
+            with open(log_file, "a") as f:
+                f.write(prints + "\n")
 
-                
-    
-    
-    print(prints)
-    print()
+        print(prints)
+        print()
+
+    if config.data.save_concept_and_residual_channel and save_concept_meta_data_folder:
+        concepts_sample_mean_tensor = torch.cat(concepts_sample_mean_list, dim=0)
+        concepts_sample_std_tensor = torch.cat(concepts_sample_std_list, dim=0)
+        concepts_pred_probs_mean_tensor = torch.cat(concepts_pred_probs_mean_list, dim=0)
+        concepts_pred_probs_std_tensor = torch.cat(concepts_pred_probs_std_list, dim=0)
+        concepts_logits_mean_tensor = torch.cat(concepts_logits_mean_list, dim=0)
+        concepts_logits_std_tensor = torch.cat(concepts_logits_std_list, dim=0)
+        c_mu_tensor = torch.cat(c_mu_list, dim=0)
+        y_pred_tensor = torch.cat(y_pred_list, dim=0)
+        y_true_tensor = torch.cat(y_true_list, dim=0)
+
+        parent_dir_path = os.path.dirname(log_file)
+        full_path = os.path.join(parent_dir_path, save_concept_meta_data_folder)
+        Path(full_path).mkdir(parents=True, exist_ok=True)
+
+        save_path_concepts_sample_mean = os.path.join(full_path, "concepts_sample_mean.pt")
+        save_path_concepts_sample_std = os.path.join(full_path, "concepts_sample_std.pt")
+        save_path_concepts_pred_probs_mean = os.path.join(full_path, "concepts_pred_probs_mean.pt")
+        save_path_concepts_pred_probs_std = os.path.join(full_path, "concepts_pred_probs_std.pt")
+        save_path_concepts_logits_mean = os.path.join(full_path, "concepts_logits_mean.pt")
+        save_path_concepts_logits_std = os.path.join(full_path, "concepts_logits_std.pt")
+        save_path_c_mu = os.path.join(full_path, "c_mu.pt")
+        save_path_y_pred = os.path.join(full_path, "y_pred.pt")
+        save_path_y_true = os.path.join(full_path, "y_true.pt")
+
+        cov_matrix_avg = cov_matrix_sum / cov_matrix_count  # [C, C]
+        save_path_cov = os.path.join(full_path, "avg_covariance_matrix.pt")
+
+        torch.save(concepts_sample_mean_tensor, save_path_concepts_sample_mean)
+        torch.save(concepts_sample_std_tensor, save_path_concepts_sample_std)
+        torch.save(concepts_pred_probs_mean_tensor, save_path_concepts_pred_probs_mean)
+        torch.save(concepts_pred_probs_std_tensor, save_path_concepts_pred_probs_std)
+        torch.save(concepts_logits_mean_tensor, save_path_concepts_logits_mean)
+        torch.save(concepts_logits_std_tensor, save_path_concepts_logits_std)
+        torch.save(c_mu_tensor, save_path_c_mu)
+        torch.save(y_pred_tensor, save_path_y_pred)
+        torch.save(y_true_tensor, save_path_y_true)
+        torch.save(cov_matrix_avg, save_path_cov)
+
+        print(f"Saved concepts sample means to {save_path_concepts_sample_mean}")
+        print(f"Saved concepts sample stds to {save_path_concepts_sample_std}")
+        print(f"Saved concepts predicted probabilities means to {save_path_concepts_pred_probs_mean}")
+        print(f"Saved concepts predicted probabilities stds to {save_path_concepts_pred_probs_std}")
+        print(f"Saved concepts logits means to {save_path_concepts_logits_mean}")
+        print(f"Saved concepts logits stds to {save_path_concepts_logits_std}")
+        print(f"Saved c_mu to {save_path_c_mu}")
+        print(f"Saved y_pred to {save_path_y_pred}")
+        print(f"Saved y_true to {save_path_y_true}")
+        print(f"Saved average covariance matrix to {save_path_cov}")
+
     metrics.reset()
     return metrics_dict
 
@@ -842,6 +948,8 @@ def validate_one_epoch_cbm(
     test=False,
     concept_names_graph=None,
     log_file=None,
+    save_concept_meta_data_folder=None,
+    metrics_only_for_saving=False,
     **kwargs
 ):
     """
@@ -870,6 +978,14 @@ def validate_one_epoch_cbm(
     """
     model.eval()
 
+    # Metadata lists to store concept predictions for saving
+    concepts_pred_probs_list = []
+    concepts_logits_list = []
+    concepts_sample_mean_list = []
+    concepts_sample_std_list = []
+    y_pred_list = []
+    y_true_list = []
+
     with torch.no_grad():
         for k, batch in enumerate(
             tqdm(loader, desc=f"Epoch {epoch}", position=0, leave=True)
@@ -893,6 +1009,28 @@ def validate_one_epoch_cbm(
                     concepts_pred_probs, dim=-1
                 )  # Calculating the metrics on the average probabilities from MCMC
 
+            # Save the concept channel (deterministic probs/logits, plus MCMC sample
+            # statistics for hard/AR concept learning where concepts_hard carries a
+            # Monte Carlo dimension)
+            if config.data.save_concept_and_residual_channel and save_concept_meta_data_folder:
+                concepts_pred_probs_detached = concepts_pred_probs.detach()
+                concepts_logits = torch.logit(concepts_pred_probs_detached, eps=1e-6)
+
+                concepts_pred_probs_list.append(concepts_pred_probs_detached.cpu())
+                concepts_logits_list.append(concepts_logits.cpu())
+
+                if config.model.concept_learning in ("hard", "autoregressive"):
+                    concepts_hard_detached = concepts_hard.detach().float()
+                    concepts_sample_mean_list.append(
+                        concepts_hard_detached.mean(dim=-1).cpu()
+                    )
+                    concepts_sample_std_list.append(
+                        concepts_hard_detached.std(dim=-1, unbiased=False).cpu()
+                    )
+
+                y_pred_list.append(target_pred_logits.detach().cpu())
+                y_true_list.append(target_true.cpu())
+
             target_loss, concepts_loss, total_loss = loss_fn(
                 concepts_pred_probs, concepts_true, target_pred_logits, target_true
             )
@@ -910,21 +1048,59 @@ def validate_one_epoch_cbm(
 
     # Calculate and log metrics
     metrics_dict = metrics.compute(validation=True, config=config)
-    if not test:
-        wandb.log({f"validation/{k}": v for k, v in metrics_dict.items()})
-        prints = f"Epoch {epoch}, Validation: "
-    else:
-        wandb.log({f"test/{k}": v for k, v in metrics_dict.items()})
-        prints = f"Test: "
-    for key, value in metrics_dict.items():
-        prints += f"{key}: {value:.3f} "
-    
-    if log_file is not None:
-        with open(log_file, "a") as f:
-            f.write(prints + "\n")
 
-    print(prints)
-    print()
+    if not metrics_only_for_saving:
+        if not test:
+            wandb.log({f"validation/{k}": v for k, v in metrics_dict.items()})
+            prints = f"Epoch {epoch}, Validation: "
+        else:
+            wandb.log({f"test/{k}": v for k, v in metrics_dict.items()})
+            prints = f"Test: "
+        for key, value in metrics_dict.items():
+            prints += f"{key}: {value:.3f} "
+
+        if log_file is not None:
+            with open(log_file, "a") as f:
+                f.write(prints + "\n")
+
+        print(prints)
+        print()
+
+    if config.data.save_concept_and_residual_channel and save_concept_meta_data_folder:
+        concepts_pred_probs_tensor = torch.cat(concepts_pred_probs_list, dim=0)
+        concepts_logits_tensor = torch.cat(concepts_logits_list, dim=0)
+        y_pred_tensor = torch.cat(y_pred_list, dim=0)
+        y_true_tensor = torch.cat(y_true_list, dim=0)
+
+        parent_dir_path = os.path.dirname(log_file)
+        full_path = os.path.join(parent_dir_path, save_concept_meta_data_folder)
+        Path(full_path).mkdir(parents=True, exist_ok=True)
+
+        save_path_concepts_pred_probs = os.path.join(full_path, "concepts_pred_probs.pt")
+        save_path_concepts_logits = os.path.join(full_path, "concepts_logits.pt")
+        save_path_y_pred = os.path.join(full_path, "y_pred.pt")
+        save_path_y_true = os.path.join(full_path, "y_true.pt")
+
+        torch.save(concepts_pred_probs_tensor, save_path_concepts_pred_probs)
+        torch.save(concepts_logits_tensor, save_path_concepts_logits)
+        torch.save(y_pred_tensor, save_path_y_pred)
+        torch.save(y_true_tensor, save_path_y_true)
+
+        print(f"Saved concepts predicted probabilities to {save_path_concepts_pred_probs}")
+        print(f"Saved concepts logits to {save_path_concepts_logits}")
+        print(f"Saved y_pred to {save_path_y_pred}")
+        print(f"Saved y_true to {save_path_y_true}")
+
+        if concepts_sample_mean_list:
+            concepts_sample_mean_tensor = torch.cat(concepts_sample_mean_list, dim=0)
+            concepts_sample_std_tensor = torch.cat(concepts_sample_std_list, dim=0)
+            save_path_concepts_sample_mean = os.path.join(full_path, "concepts_sample_mean.pt")
+            save_path_concepts_sample_std = os.path.join(full_path, "concepts_sample_std.pt")
+            torch.save(concepts_sample_mean_tensor, save_path_concepts_sample_mean)
+            torch.save(concepts_sample_std_tensor, save_path_concepts_sample_std)
+            print(f"Saved concepts sample means to {save_path_concepts_sample_mean}")
+            print(f"Saved concepts sample stds to {save_path_concepts_sample_std}")
+
     metrics.reset()
     return metrics_dict
 

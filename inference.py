@@ -20,7 +20,9 @@ from utils.intervention import intervene_cbm, intervene_scbm, intervene_scbm_res
 from utils.training import Custom_Metrics, Custom_Regression_Metrics, train_one_epoch_cbm, train_one_epoch_scbm, validate_one_epoch_cbm, validate_one_epoch_scbm, validate_one_epoch_scbm_residual
 from utils.utils import reset_random_seeds
 import torch
+from torch.utils.data import DataLoader
 from models.models import create_model
+from datasets.CUB_dataset import CUB_DatasetGenerator, get_CUB_transforms
 
 def run(config):
     # Reproducibility
@@ -136,11 +138,14 @@ def run(config):
     if config.run_inference == True:
         if config.model.model == "cbm":
             validate_one_epoch = validate_one_epoch_cbm
+            test_save_kwargs = {"save_concept_meta_data_folder": "test"}
         elif config.model.model == "scbm":
             validate_one_epoch = validate_one_epoch_scbm
+            test_save_kwargs = {"save_concept_meta_data_folder": "test"}
         elif config.model.model == "scbm_residual":
             validate_one_epoch = validate_one_epoch_scbm_residual
-            
+            test_save_kwargs = {"save_residual_meta_data_folder": "test"}
+
         #save_concept_target_pred = config.inference.save_concept_target_pred
 
         print("\nEVALUATION ON THE TEST SET:\n")
@@ -154,10 +159,10 @@ def run(config):
             device,
             test=True,
             concept_names_graph=concept_names_graph,
-            log_file=log_file_inference, 
-            save_residual_meta_data_folder="test",
+            log_file=log_file_inference,
+            **test_save_kwargs,
         )
-        
+
         # ---------------------------------------------------------
         # Save residual meta data for analysis of concept discovery
         # ---------------------------------------------------------
@@ -204,11 +209,183 @@ def run(config):
                 save_residual_meta_data_folder="train",
                 metrics_only_for_saving=True,
             )
-                
-        
-        
-        
-        
+
+            # Same train images, but with the deterministic (test-time) transform instead
+            # of the training-time augmentation, so train-vs-test logit comparisons aren't
+            # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
+            if config.data.dataset == "CUB":
+                _, test_transform = get_CUB_transforms()
+                train_clean_dataset = CUB_DatasetGenerator(
+                    train_loader.dataset.data, transform=test_transform, cache=False
+                )
+                train_clean_analysis_loader = make_analysis_loader(
+                    DataLoader(train_clean_dataset, batch_size=config.model.val_batch_size),
+                    batch_size=config.model.val_batch_size,
+                    num_workers=config.workers,
+                )
+
+                validate_one_epoch(
+                    train_clean_analysis_loader,
+                    model,
+                    metrics,
+                    t_epochs,
+                    config,
+                    loss_fn,
+                    device,
+                    test=False,
+                    concept_names_graph=concept_names_graph,
+                    log_file=log_file_inference,
+                    save_residual_meta_data_folder="train_with_test_transform",
+                    metrics_only_for_saving=True,
+                )
+
+        # ---------------------------------------------------------
+        # Save concept meta data for analysis (CBM baseline, no residual channel)
+        # ---------------------------------------------------------
+        elif config.model.model == "cbm" and config.data.save_concept_and_residual_channel:
+            train_analysis_loader = make_analysis_loader(
+                train_loader,
+                batch_size=config.model.val_batch_size,
+                num_workers=config.workers,
+            )
+            val_analysis_loader = make_analysis_loader(
+                val_loader,
+                batch_size=config.model.val_batch_size,
+                num_workers=config.workers,
+            )
+
+            validate_one_epoch(
+                val_analysis_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file_inference,
+                save_concept_meta_data_folder="val",
+                metrics_only_for_saving=True,
+            )
+
+            validate_one_epoch(
+                train_analysis_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file_inference,
+                save_concept_meta_data_folder="train",
+                metrics_only_for_saving=True,
+            )
+
+            # Same train images, but with the deterministic (test-time) transform instead
+            # of the training-time augmentation, so train-vs-test logit comparisons aren't
+            # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
+            if config.data.dataset == "CUB":
+                _, test_transform = get_CUB_transforms()
+                train_clean_dataset = CUB_DatasetGenerator(
+                    train_loader.dataset.data, transform=test_transform, cache=False
+                )
+                train_clean_analysis_loader = make_analysis_loader(
+                    DataLoader(train_clean_dataset, batch_size=config.model.val_batch_size),
+                    batch_size=config.model.val_batch_size,
+                    num_workers=config.workers,
+                )
+
+                validate_one_epoch(
+                    train_clean_analysis_loader,
+                    model,
+                    metrics,
+                    t_epochs,
+                    config,
+                    loss_fn,
+                    device,
+                    test=False,
+                    concept_names_graph=concept_names_graph,
+                    log_file=log_file_inference,
+                    save_concept_meta_data_folder="train_with_test_transform",
+                    metrics_only_for_saving=True,
+                )
+
+        # ---------------------------------------------------------
+        # Save concept meta data for analysis (no residual channel)
+        # ---------------------------------------------------------
+        elif config.model.model == "scbm" and config.data.save_concept_and_residual_channel:
+            train_analysis_loader = make_analysis_loader(
+                train_loader,
+                batch_size=config.model.val_batch_size,
+                num_workers=config.workers,
+            )
+            val_analysis_loader = make_analysis_loader(
+                val_loader,
+                batch_size=config.model.val_batch_size,
+                num_workers=config.workers,
+            )
+
+            validate_one_epoch(
+                val_analysis_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file_inference,
+                save_concept_meta_data_folder="val",
+                metrics_only_for_saving=True,
+            )
+
+            validate_one_epoch(
+                train_analysis_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file_inference,
+                save_concept_meta_data_folder="train",
+                metrics_only_for_saving=True,
+            )
+
+            # Same train images, but with the deterministic (test-time) transform instead
+            # of the training-time augmentation, so train-vs-test logit comparisons aren't
+            # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
+            if config.data.dataset == "CUB":
+                _, test_transform = get_CUB_transforms()
+                train_clean_dataset = CUB_DatasetGenerator(
+                    train_loader.dataset.data, transform=test_transform, cache=False
+                )
+                train_clean_analysis_loader = make_analysis_loader(
+                    DataLoader(train_clean_dataset, batch_size=config.model.val_batch_size),
+                    batch_size=config.model.val_batch_size,
+                    num_workers=config.workers,
+                )
+
+                validate_one_epoch(
+                    train_clean_analysis_loader,
+                    model,
+                    metrics,
+                    t_epochs,
+                    config,
+                    loss_fn,
+                    device,
+                    test=False,
+                    concept_names_graph=concept_names_graph,
+                    log_file=log_file_inference,
+                    save_concept_meta_data_folder="train_with_test_transform",
+                    metrics_only_for_saving=True,
+                )
 
     # ---------------------------------
     #       Interventions

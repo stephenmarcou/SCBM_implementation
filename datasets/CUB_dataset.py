@@ -316,14 +316,8 @@ def train_test_split_CUB(config, incomplete):
     return data_train, data_val, data_test
 
 
-def get_CUB_dataloaders(config, incomplete):
-    """Returns a dictionary of data loaders for the CUB dataset, for the training, validation, and test sets."""
-    train_imgs, val_imgs, test_imgs = train_test_split_CUB(
-        config, incomplete
-    )
-
-    # Following the transformations from CBM paper
-    resol = 299
+def get_CUB_transforms(resol=299):
+    """Following the transformations from the CBM paper."""
     train_transform = transforms.Compose(
         [
             transforms.ColorJitter(brightness=32 / 255, saturation=(0.5, 1.5)),
@@ -343,6 +337,17 @@ def get_CUB_dataloaders(config, incomplete):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
+
+    return train_transform, test_transform
+
+
+def get_CUB_dataloaders(config, incomplete):
+    """Returns a dictionary of data loaders for the CUB dataset, for the training, validation, and test sets."""
+    train_imgs, val_imgs, test_imgs = train_test_split_CUB(
+        config, incomplete
+    )
+
+    train_transform, test_transform = get_CUB_transforms(resol=299)
 
     # Datasets
     image_datasets = {
