@@ -139,7 +139,7 @@ def create_experiment_path(config):
     elif config.data.dataset == "multilabel_synthetic":
         if config.save_name is not None:
             ex_name = config.save_name + "_" + ex_name
-        if config.model.model == "scbm_residual":
+        if config.model.model in ("scbm_residual", "cbm_residual"):
             ex_name = f"num_res_{config.data.num_residuals}_" + ex_name
         if config.data.get("cov_structure", "lowrank") == "paired":
             ex_name = "paired_cov_" + ex_name
@@ -316,7 +316,7 @@ def train(config):
     # ---------------------------------
     #            Training
     # ---------------------------------
-    if config.model.model == "cbm":
+    if config.model.model in ("cbm", "cbm_residual"):
         validate_one_epoch = validate_one_epoch_cbm
         train_one_epoch = train_one_epoch_cbm
         intervene = intervene_cbm
@@ -529,7 +529,7 @@ def train(config):
     # ---------------------------------------------------------
     # Save residual meta data for analysis of concept discovery
     # ---------------------------------------------------------
-    if config.model.model == "scbm_residual" and config.data.save_concept_and_residual_channel:
+    if config.model.model in ("scbm_residual", "cbm_residual") and config.data.save_concept_and_residual_channel:
         train_analysis_loader = make_analysis_loader(
             train_loader,
             batch_size=config.model.val_batch_size,

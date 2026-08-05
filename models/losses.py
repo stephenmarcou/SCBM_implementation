@@ -22,7 +22,7 @@ def create_loss(config):
     Returns:
         nn.Module: The loss function.
     """
-    if config.model.model == "cbm":
+    if config.model.model in ("cbm", "cbm_residual"):
         return CBLoss(
             num_classes=config.data.num_classes,
             reduction="mean",
@@ -76,6 +76,9 @@ class CBLoss(nn.Module):
         self.alpha = alpha if config.training_mode == "joint" else 1.0
         self.reduction = reduction
 
+        self.regression_task = config.regression_task
+        self.multilabel_task = config.multilabel_task
+
     def forward(
         self,
         concepts_pred_probs: Tensor,
@@ -98,7 +101,22 @@ class CBLoss(nn.Module):
         assert torch.all((concepts_true == 0) | (concepts_true == 1))
         concepts_loss = self.compute_concept_loss(concepts_true, concepts_pred_probs)
 
-        if self.num_classes == 2:
+        if self.regression_task:
+            target_pred = target_pred_logits.squeeze(-1)
+            target_true = target_true.float().view_as(target_pred)
+            target_loss = F.mse_loss(
+                target_pred, target_true, reduction=self.reduction
+            )
+
+        # target_pred_logits: (B, K+J),  target_true: (B, K+J) float32
+        elif self.multilabel_task:
+            target_loss = F.binary_cross_entropy_with_logits(
+                target_pred_logits,  # (B, num_tasks)
+                target_true.float(),  # (B, num_tasks)
+                reduction=self.reduction,
+            )
+
+        elif self.num_classes == 2:
             # Logits to probs
             target_pred_probs = nn.Sigmoid()(target_pred_logits.squeeze(1))
             target_loss = F.binary_cross_entropy(

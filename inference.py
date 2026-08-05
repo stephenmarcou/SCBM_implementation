@@ -136,7 +136,7 @@ def run(config):
     #       Inference
     # ---------------------------------
     if config.run_inference == True:
-        if config.model.model == "cbm":
+        if config.model.model in ("cbm", "cbm_residual"):
             validate_one_epoch = validate_one_epoch_cbm
             test_save_kwargs = {"save_concept_meta_data_folder": "test"}
         elif config.model.model == "scbm":
@@ -166,7 +166,7 @@ def run(config):
         # ---------------------------------------------------------
         # Save residual meta data for analysis of concept discovery
         # ---------------------------------------------------------
-        if config.model.model == "scbm_residual" and config.data.save_concept_and_residual_channel:
+        if config.model.model in ("scbm_residual", "cbm_residual") and config.data.save_concept_and_residual_channel:
             train_analysis_loader = make_analysis_loader(
                 train_loader,
                 batch_size=config.model.val_batch_size,
@@ -392,7 +392,7 @@ def run(config):
     # ---------------------------------
 
     if config.run_interventions == True:
-        if config.model.model == "cbm":
+        if config.model.model in ("cbm", "cbm_residual"):
             intervene = intervene_cbm
         elif config.model.model == "scbm":
             intervene = intervene_scbm

@@ -3,6 +3,7 @@ SCBM and baseline models.
 """
 
 import os
+import copy
 import math
 import torch
 from torch import nn
@@ -32,12 +33,15 @@ def create_model(config):
     Parse the configuration file and return a relevant model
     """
     model = None
-    if config.model.model not in ["cbm", "scbm", "scbm_residual"]:
+    if config.model.model not in ["cbm", "cbm_residual", "scbm", "scbm_residual"]:
         print("Could not create model with name ", config.model, "!")
         quit()
     if config.model.model == "cbm":
         print("Using CBM model!")
         model = CBM(config)
+    elif config.model.model == "cbm_residual":
+        print("Using CBM model with independent residual channel!")
+        model = CBMResidual(config)
     elif config.model.model == "scbm":
         print("Using SCBM model!")
         model = SCBM(config)
@@ -1453,6 +1457,9 @@ class CBMResidual(nn.Module):
         self.straight_through = config_model.straight_through
         self.curr_temp = 1.0
 
+        self.multilabel_task = config_model.multilabel_task
+        self.regression_task = config_model.regression_task
+
         if self.training_mode == "joint":
             self.num_epochs = config_model.j_epochs
         elif self.training_mode == "sequential":
@@ -1658,7 +1665,10 @@ class CBMResidual(nn.Module):
                 concept_y_logits_i + residual_y_logits
             )
 
-            if self.pred_dim == 1:
+            if self.regression_task:
+                y_pred_probs_sum += y_pred_logits_i
+            elif self.multilabel_task or self.pred_dim == 1:
+                # Independent per-task Bernoulli probabilities
                 y_pred_probs_sum += torch.sigmoid(
                     y_pred_logits_i
                 )
@@ -1672,7 +1682,9 @@ class CBMResidual(nn.Module):
             y_pred_probs_sum / self.num_monte_carlo
         )
 
-        if self.pred_dim == 1:
+        if self.regression_task:
+            y_pred_logits = y_pred_probs
+        elif self.multilabel_task or self.pred_dim == 1:
             y_pred_logits = torch.logit(
                 y_pred_probs,
                 eps=1e-6,
@@ -1692,9 +1704,14 @@ class CBMResidual(nn.Module):
         concepts_interv_probs,
         concepts_mask,
         input_features,
+        concepts_pred_probs=None,
     ):
         """
         Perform interventions on the concept channel.
+
+        `concepts_pred_probs` is accepted for signature compatibility with
+        `intervene_cbm` and is unused: the hard concept channel is fully
+        described by `concepts_interv_probs`.
 
         The residual channel is recomputed directly from the input and
         remains unaffected by the concept intervention.
@@ -1749,7 +1766,9 @@ class CBMResidual(nn.Module):
                 concept_y_logits_i + residual_y_logits
             )
 
-            if self.pred_dim == 1:
+            if self.regression_task:
+                y_pred_probs_sum += y_pred_logits_i
+            elif self.multilabel_task or self.pred_dim == 1:
                 y_pred_probs_sum += torch.sigmoid(
                     y_pred_logits_i
                 )
@@ -1763,7 +1782,9 @@ class CBMResidual(nn.Module):
             y_pred_probs_sum / self.num_monte_carlo
         )
 
-        if self.pred_dim == 1:
+        if self.regression_task:
+            y_pred_logits = y_pred_probs
+        elif self.multilabel_task or self.pred_dim == 1:
             y_pred_logits = torch.logit(
                 y_pred_probs,
                 eps=1e-6,

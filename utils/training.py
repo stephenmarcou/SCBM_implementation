@@ -970,6 +970,7 @@ def validate_one_epoch_cbm(
     concept_names_graph=None,
     log_file=None,
     save_concept_meta_data_folder=None,
+    save_residual_meta_data_folder=None,
     metrics_only_for_saving=False,
     **kwargs
 ):
@@ -999,11 +1000,21 @@ def validate_one_epoch_cbm(
     """
     model.eval()
 
+    # Both kwargs name the same thing: the sub-folder to dump analysis artifacts into.
+    # train.py/inference.py pass the residual-flavoured name for residual models.
+    save_meta_data_folder = (
+        save_concept_meta_data_folder or save_residual_meta_data_folder
+    )
+
+    # The residual channel only exists for the residual variant of the CBM
+    has_residual_channel = config.model.model == "cbm_residual"
+
     # Metadata lists to store concept predictions for saving
     concepts_pred_probs_list = []
     concepts_logits_list = []
     concepts_sample_mean_list = []
     concepts_sample_std_list = []
+    residual_list = []
     y_pred_list = []
     y_true_list = []
 
@@ -1016,9 +1027,14 @@ def validate_one_epoch_cbm(
             ].to(device)
             concepts_true = batch["concepts"].to(device)
 
-            concepts_pred_probs, target_pred_logits, concepts_hard = model(
-                batch_features, epoch, validation=True
-            )
+            if has_residual_channel:
+                concepts_pred_probs, target_pred_logits, concepts_hard, residual = model(
+                    batch_features, epoch, validation=True, return_residual=True
+                )
+            else:
+                concepts_pred_probs, target_pred_logits, concepts_hard = model(
+                    batch_features, epoch, validation=True
+                )
             if config.model.concept_learning == "autoregressive":
                 concepts_input = concepts_hard
             elif config.model.concept_learning == "hard":
@@ -1033,7 +1049,7 @@ def validate_one_epoch_cbm(
             # Save the concept channel (deterministic probs/logits, plus MCMC sample
             # statistics for hard/AR concept learning where concepts_hard carries a
             # Monte Carlo dimension)
-            if config.data.save_concept_and_residual_channel and save_concept_meta_data_folder:
+            if config.data.save_concept_and_residual_channel and save_meta_data_folder:
                 concepts_pred_probs_detached = concepts_pred_probs.detach()
                 concepts_logits = torch.logit(concepts_pred_probs_detached, eps=1e-6)
 
@@ -1048,6 +1064,9 @@ def validate_one_epoch_cbm(
                     concepts_sample_std_list.append(
                         concepts_hard_detached.std(dim=-1, unbiased=False).cpu()
                     )
+
+                if has_residual_channel:
+                    residual_list.append(residual.detach().float().cpu())
 
                 y_pred_list.append(target_pred_logits.detach().cpu())
                 y_true_list.append(target_true.cpu())
@@ -1087,14 +1106,14 @@ def validate_one_epoch_cbm(
         print(prints)
         print()
 
-    if config.data.save_concept_and_residual_channel and save_concept_meta_data_folder:
+    if config.data.save_concept_and_residual_channel and save_meta_data_folder:
         concepts_pred_probs_tensor = torch.cat(concepts_pred_probs_list, dim=0)
         concepts_logits_tensor = torch.cat(concepts_logits_list, dim=0)
         y_pred_tensor = torch.cat(y_pred_list, dim=0)
         y_true_tensor = torch.cat(y_true_list, dim=0)
 
         parent_dir_path = os.path.dirname(log_file)
-        full_path = os.path.join(parent_dir_path, save_concept_meta_data_folder)
+        full_path = os.path.join(parent_dir_path, save_meta_data_folder)
         Path(full_path).mkdir(parents=True, exist_ok=True)
 
         save_path_concepts_pred_probs = os.path.join(full_path, "concepts_pred_probs.pt")
@@ -1121,6 +1140,63 @@ def validate_one_epoch_cbm(
             torch.save(concepts_sample_std_tensor, save_path_concepts_sample_std)
             print(f"Saved concepts sample means to {save_path_concepts_sample_mean}")
             print(f"Saved concepts sample stds to {save_path_concepts_sample_std}")
+
+        # -----------------------------------------------------------------
+        # Residual channel (cbm_residual only)
+        # -----------------------------------------------------------------
+        # Written in the same layout as the SCBM-residual artifacts so that the
+        # concept-discovery notebooks can load a cbm_residual run unchanged:
+        # every "concepts_residuals_*" tensor is [N, C+R], concept block first.
+        #
+        # Unlike the SCBM, this model's concept and residual channels are both
+        # deterministic given x, and the residual is NOT a logit of anything --
+        # it is fed to the task head as-is. Therefore:
+        #   c_res_mu                            = [concept logits | residual]
+        #   concepts_residuals_pred_probs_mean  = [concept probs   | sigmoid(residual)]
+        #     the residual block is only a monotone squashing of the residual,
+        #     kept for shape compatibility; it is not used by the model.
+        #   concepts_residuals_pred_probs_std   = 0 everywhere (no MC over probs)
+        #   concepts_residuals_sample_mean      = [MC mean of hard concepts | residual]
+        # There is no covariance matrix: the channels are modelled independently.
+        if residual_list:
+            residual_tensor = torch.cat(residual_list, dim=0)  # [N, R]
+
+            c_res_mu_tensor = torch.cat(
+                [concepts_logits_tensor, residual_tensor], dim=1
+            )  # [N, C+R]
+            cr_probs_mean_tensor = torch.cat(
+                [concepts_pred_probs_tensor, torch.sigmoid(residual_tensor)], dim=1
+            )
+            cr_probs_std_tensor = torch.zeros_like(cr_probs_mean_tensor)
+
+            save_path_residual = os.path.join(full_path, "res_mu.pt")
+            save_path_c_res_mu = os.path.join(full_path, "c_res_mu.pt")
+            save_path_cr_probs_mean = os.path.join(
+                full_path, "concepts_residuals_pred_probs_mean.pt"
+            )
+            save_path_cr_probs_std = os.path.join(
+                full_path, "concepts_residuals_pred_probs_std.pt"
+            )
+
+            torch.save(residual_tensor, save_path_residual)
+            torch.save(c_res_mu_tensor, save_path_c_res_mu)
+            torch.save(cr_probs_mean_tensor, save_path_cr_probs_mean)
+            torch.save(cr_probs_std_tensor, save_path_cr_probs_std)
+
+            print(f"Saved residuals {tuple(residual_tensor.shape)} to {save_path_residual}")
+            print(f"Saved c_res_mu {tuple(c_res_mu_tensor.shape)} to {save_path_c_res_mu}")
+            print(f"Saved concepts residuals predicted probabilities means to {save_path_cr_probs_mean}")
+            print(f"Saved concepts residuals predicted probabilities stds (all zeros, channel is deterministic) to {save_path_cr_probs_std}")
+
+            if concepts_sample_mean_list:
+                cr_sample_mean_tensor = torch.cat(
+                    [concepts_sample_mean_tensor, residual_tensor], dim=1
+                )
+                save_path_cr_sample_mean = os.path.join(
+                    full_path, "concepts_residuals_sample_mean.pt"
+                )
+                torch.save(cr_sample_mean_tensor, save_path_cr_sample_mean)
+                print(f"Saved concepts residuals sample means to {save_path_cr_sample_mean}")
 
     metrics.reset()
     return metrics_dict

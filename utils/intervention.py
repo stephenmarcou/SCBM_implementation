@@ -1100,7 +1100,7 @@ def intervene_cbm(
     
     
     num_interventions = min(200, config.data.num_concepts)
-    if config.model.model == "cbm" and config.model.concept_learning in (
+    if config.model.model in ("cbm", "cbm_residual") and config.model.concept_learning in (
         "hard",
         "autoregressive",
         "embedding",
@@ -1548,7 +1548,7 @@ def define_strategy(inter_strategy, train_loader, model, device, config):
         >>> strategy = define_strategy("simple_perc", train_loader, model, device, config)
         USING FOLLOWING STRATEGY: PercentileStrategy
     """
-    if config.model.model == "cbm":
+    if config.model.model in ("cbm", "cbm_residual"):
         if config.model.concept_learning in ("hard", "autoregressive", "embedding"):
             inter_strategy = HardCBMStrategy()
         elif inter_strategy == "simple_perc":
