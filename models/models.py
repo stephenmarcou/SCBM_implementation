@@ -1410,6 +1410,439 @@ class CBM(nn.Module):
         self.concept_predictor.apply(freeze_module)
 
 
+
+
+
+
+
+
+class CBMResidual(nn.Module):
+    """
+    Hard Concept Bottleneck Model with an independent residual channel.
+
+    Concept pathway:
+        x -> concept_encoder -> concept_predictor -> concepts -> concept_head
+
+    Residual pathway:
+        x -> residual_encoder -> residual_predictor -> residual_head
+
+    Final task prediction:
+        y_logits = concept_y_logits + residual_y_logits
+
+    The residual channel:
+        - does not receive concepts as input;
+        - is not sampled jointly with concepts;
+        - has no concept-residual covariance;
+        - is trained only through the task loss.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+
+        config_model = config.model
+
+        self.num_concepts = config.data.num_concepts
+        self.num_residuals = config.data.num_residuals
+        self.num_classes = config.data.num_classes
+
+        self.encoder_arch = config_model.encoder_arch
+        self.head_arch = config_model.head_arch
+        self.training_mode = config_model.training_mode
+
+        self.num_monte_carlo = config_model.num_monte_carlo
+        self.straight_through = config_model.straight_through
+        self.curr_temp = 1.0
+
+        if self.training_mode == "joint":
+            self.num_epochs = config_model.j_epochs
+        elif self.training_mode == "sequential":
+            self.num_epochs = config_model.t_epochs
+        else:
+            raise ValueError(
+                "CBMResidual only supports 'joint' and 'sequential' training."
+            )
+
+        # ---------------------------------------------------------
+        # Concept encoder
+        # ---------------------------------------------------------
+        self.encoder, n_features = self._build_encoder(config)
+
+        # ---------------------------------------------------------
+        # Independent residual encoder
+        # ---------------------------------------------------------
+        # deepcopy gives the residual pathway independent parameters,
+        # while retaining the same initial encoder architecture/weights.
+        self.residual_encoder = copy.deepcopy(self.encoder)
+
+        # ---------------------------------------------------------
+        # Concept and residual representations
+        # ---------------------------------------------------------
+        self.concept_predictor = nn.Linear(
+            n_features,
+            self.num_concepts,
+            bias=True,
+        )
+
+        self.residual_predictor = nn.Linear(
+            n_features,
+            self.num_residuals,
+            bias=True,
+        )
+
+        self.act_c = nn.Sigmoid()
+
+        # ---------------------------------------------------------
+        # Task heads
+        # ---------------------------------------------------------
+        self.pred_dim = 1 if self.num_classes == 2 else self.num_classes
+
+        if self.head_arch == "linear":
+            self.concept_head = nn.Linear(
+                self.num_concepts,
+                self.pred_dim,
+            )
+        else:
+            self.concept_head = nn.Sequential(
+                nn.Linear(self.num_concepts, 256),
+                nn.ReLU(),
+                nn.Linear(256, self.pred_dim),
+            )
+
+        # Keep the residual-to-output mapping deliberately simple.
+        self.residual_head = nn.Linear(
+            self.num_residuals,
+            self.pred_dim,
+        )
+
+    def _build_encoder(self, config):
+        """Construct the encoder used by one pathway."""
+
+        config_model = config.model
+
+        if self.encoder_arch == "FCNN":
+            n_features = 256
+
+            encoder = FCNNEncoder(
+                num_inputs=config.data.num_covariates,
+                num_hidden=n_features,
+                num_deep=2,
+            )
+
+        elif self.encoder_arch == "resnet18":
+            encoder_res = models.resnet18(weights=None)
+
+            encoder_res.load_state_dict(
+                torch.load(
+                    os.path.join(
+                        config_model.model_directory,
+                        "resnet/resnet18-5c106cde.pth",
+                    ),
+                    weights_only=False,
+                )
+            )
+
+            n_features = encoder_res.fc.in_features
+            encoder_res.fc = Identity()
+            encoder = nn.Sequential(encoder_res)
+
+        elif self.encoder_arch == "simple_CNN":
+            n_features = 256
+
+            encoder = nn.Sequential(
+                nn.Conv2d(3, 32, 5, 3),
+                nn.ReLU(),
+                nn.Conv2d(32, 64, 5, 3),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
+                nn.Dropout(0.25),
+                nn.Flatten(),
+                nn.Linear(9216, n_features),
+                nn.ReLU(),
+            )
+
+        else:
+            raise NotImplementedError(
+                f"Encoder architecture '{self.encoder_arch}' is not supported."
+            )
+
+        return encoder, n_features
+
+    def forward(
+        self,
+        x,
+        epoch,
+        validation=False,
+        return_residual=False,
+    ):
+        """
+        Run the hard CBM and independent residual pathways.
+
+        Returns:
+            c_prob:
+                Predicted concept probabilities, shape (B, C).
+
+            y_pred_logits:
+                Final task logits, shape (B, K).
+
+            c:
+                Sampled hard concepts, shape (B, C, M).
+
+            residual, optional:
+                Continuous residual representation, shape (B, R).
+        """
+
+        # ---------------------------------------------------------
+        # Concept pathway
+        # ---------------------------------------------------------
+        concept_features = self.encoder(x)
+
+        c_logit = self.concept_predictor(concept_features)
+        c_prob = self.act_c(c_logit)
+
+        c_prob_mcmc = c_prob.unsqueeze(-1).expand(
+            -1,
+            -1,
+            self.num_monte_carlo,
+        )
+
+        if self.training_mode == "sequential" or validation:
+            # No task-loss gradient through the sampled concepts.
+            c = torch.bernoulli(c_prob_mcmc)
+
+        elif self.training_mode == "joint":
+            temperature = self.compute_temperature(
+                epoch,
+                device=c_prob.device,
+            )
+
+            distribution = RelaxedBernoulli(
+                temperature=temperature,
+                probs=c_prob,
+            )
+
+            c_relaxed = distribution.rsample(
+                [self.num_monte_carlo]
+            ).movedim(0, -1)
+
+            if self.straight_through:
+                c_hard = (c_relaxed > 0.5).float()
+                c = c_hard - c_relaxed.detach() + c_relaxed
+            else:
+                c = c_relaxed
+
+        else:
+            raise ValueError(
+                f"Unsupported training mode: {self.training_mode}"
+            )
+
+        # ---------------------------------------------------------
+        # Independent residual pathway
+        # ---------------------------------------------------------
+        residual_features = self.residual_encoder(x)
+        residual = self.residual_predictor(residual_features)
+        residual_y_logits = self.residual_head(residual)
+
+        # ---------------------------------------------------------
+        # Combine the two pathways at the output-logit level
+        # ---------------------------------------------------------
+        y_pred_probs_sum = 0
+
+        for sample_idx in range(self.num_monte_carlo):
+            c_i = c[:, :, sample_idx]
+
+            concept_y_logits_i = self.concept_head(c_i)
+
+            # The residual pathway is an additive correction to the
+            # concept-based task logits.
+            y_pred_logits_i = (
+                concept_y_logits_i + residual_y_logits
+            )
+
+            if self.pred_dim == 1:
+                y_pred_probs_sum += torch.sigmoid(
+                    y_pred_logits_i
+                )
+            else:
+                y_pred_probs_sum += torch.softmax(
+                    y_pred_logits_i,
+                    dim=1,
+                )
+
+        y_pred_probs = (
+            y_pred_probs_sum / self.num_monte_carlo
+        )
+
+        if self.pred_dim == 1:
+            y_pred_logits = torch.logit(
+                y_pred_probs,
+                eps=1e-6,
+            )
+        else:
+            y_pred_logits = torch.log(
+                y_pred_probs + 1e-6
+            )
+
+        if return_residual:
+            return c_prob, y_pred_logits, c, residual
+
+        return c_prob, y_pred_logits, c
+
+    def intervene(
+        self,
+        concepts_interv_probs,
+        concepts_mask,
+        input_features,
+    ):
+        """
+        Perform interventions on the concept channel.
+
+        The residual channel is recomputed directly from the input and
+        remains unaffected by the concept intervention.
+        """
+
+        # ---------------------------------------------------------
+        # Sample the concept representation
+        # ---------------------------------------------------------
+        c_prob_mcmc = concepts_interv_probs.unsqueeze(-1).expand(
+            -1,
+            -1,
+            self.num_monte_carlo,
+        )
+
+        c = torch.bernoulli(c_prob_mcmc)
+
+        # Fix intervened concepts to their intervention values.
+        intervened = concepts_mask == 1
+
+        c[intervened] = (
+            concepts_interv_probs[intervened]
+            .unsqueeze(-1)
+            .expand(-1, self.num_monte_carlo)
+        )
+
+        # ---------------------------------------------------------
+        # Recompute the independent residual pathway
+        # ---------------------------------------------------------
+        residual_features = self.residual_encoder(
+            input_features
+        )
+
+        residual = self.residual_predictor(
+            residual_features
+        )
+
+        residual_y_logits = self.residual_head(
+            residual
+        )
+
+        # ---------------------------------------------------------
+        # Predict using intervened concepts and unchanged residuals
+        # ---------------------------------------------------------
+        y_pred_probs_sum = 0
+
+        for sample_idx in range(self.num_monte_carlo):
+            c_i = c[:, :, sample_idx]
+
+            concept_y_logits_i = self.concept_head(c_i)
+
+            y_pred_logits_i = (
+                concept_y_logits_i + residual_y_logits
+            )
+
+            if self.pred_dim == 1:
+                y_pred_probs_sum += torch.sigmoid(
+                    y_pred_logits_i
+                )
+            else:
+                y_pred_probs_sum += torch.softmax(
+                    y_pred_logits_i,
+                    dim=1,
+                )
+
+        y_pred_probs = (
+            y_pred_probs_sum / self.num_monte_carlo
+        )
+
+        if self.pred_dim == 1:
+            y_pred_logits = torch.logit(
+                y_pred_probs,
+                eps=1e-6,
+            )
+        else:
+            y_pred_logits = torch.log(
+                y_pred_probs + 1e-6
+            )
+
+        return y_pred_logits
+
+    def compute_temperature(self, epoch, device):
+        """Anneal the RelaxedBernoulli temperature from 1.0 to 0.5."""
+
+        final_temp = torch.tensor(0.5, device=device)
+        init_temp = torch.tensor(1.0, device=device)
+
+        rate = (
+            torch.log(final_temp) - torch.log(init_temp)
+        ) / float(self.num_epochs)
+
+        curr_temp = torch.maximum(
+            init_temp * torch.exp(rate * epoch),
+            final_temp,
+        )
+
+        self.curr_temp = curr_temp
+        return curr_temp
+
+    def freeze_c(self):
+        """
+        Sequential stage 1: train only the concept predictor.
+
+        The residual pathway and both task heads are frozen.
+        """
+
+        self.encoder.apply(unfreeze_module)
+        self.concept_predictor.apply(unfreeze_module)
+
+        self.concept_head.apply(freeze_module)
+
+        self.residual_encoder.apply(freeze_module)
+        self.residual_predictor.apply(freeze_module)
+        self.residual_head.apply(freeze_module)
+
+    def freeze_t(self):
+        """
+        Sequential stage 2: freeze the concept predictor and train the
+        concept task head together with the independent residual pathway.
+        """
+
+        self.encoder.apply(freeze_module)
+        self.concept_predictor.apply(freeze_module)
+
+        self.concept_head.apply(unfreeze_module)
+
+        self.residual_encoder.apply(unfreeze_module)
+        self.residual_predictor.apply(unfreeze_module)
+        self.residual_head.apply(unfreeze_module)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class Identity(nn.Module):
     def __init__(self):
         super(Identity, self).__init__()

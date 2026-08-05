@@ -469,7 +469,8 @@ def validate_one_epoch_scbm_residual(
     
     cov_matrix_sum = None
     cov_matrix_count = 0
-    
+    cov_matrix_list = []
+
     # Define intervention strategy for L_int_extension_loss if needed
     if config.model.use_L_int_extension_loss == True:
         strategy = config.model.inter_strategy #"emp_perc"
@@ -540,12 +541,17 @@ def validate_one_epoch_scbm_residual(
                 y_pred_list.append(target_pred_logits.cpu())
                 y_true_list.append(target_true.cpu())
                 
-                sigma_mean_batch = cov.mean(dim=0).cpu() #[C+R, C+R]
+                cov_detached = cov.detach()
+
+                sigma_mean_batch = cov_detached.mean(dim=0).cpu() #[C+R, C+R]
                 if cov_matrix_sum is None:
                     cov_matrix_sum = sigma_mean_batch
                 else:
                     cov_matrix_sum += sigma_mean_batch
                 cov_matrix_count += 1
+
+                # Per-sample covariance matrices [B, C+R, C+R]
+                cov_matrix_list.append(cov_detached.float().cpu())
                                 
                 
                 
@@ -664,9 +670,11 @@ def validate_one_epoch_scbm_residual(
         
         cov_matrix_avg = cov_matrix_sum / cov_matrix_count  # [C+R, C+R]
         save_path_cov = os.path.join(full_path, "avg_covariance_matrix.pt")
-        
-        
-        
+
+        cov_matrices_tensor = torch.cat(cov_matrix_list, dim=0)  # [N, C+R, C+R]
+        save_path_cov_per_sample = os.path.join(full_path, "covariance_matrices.pt")
+
+
         torch.save(concepts_residuals_mean_tensor, save_path_concepts_residual_mean)
         torch.save(concepts_residuals_std_tensor, save_path_concepts_residual_std)
         torch.save(concepts_residuals_probs_mean_tensor, save_path_concepts_residual_probs_mean)
@@ -677,6 +685,7 @@ def validate_one_epoch_scbm_residual(
         torch.save(y_pred_tensor, save_path_y_pred)
         torch.save(y_true_tensor, save_path_y_true)
         torch.save(cov_matrix_avg, save_path_cov)
+        torch.save(cov_matrices_tensor, save_path_cov_per_sample)
 
         print(f"Saved concepts residuals means to {save_path_concepts_residual_mean}")
         print(f"Saved concepts residuals stds to {save_path_concepts_residual_std}")
@@ -689,8 +698,9 @@ def validate_one_epoch_scbm_residual(
         print(f"Saved y_pred to {save_path_y_pred}")
         print(f"Saved y_true to {save_path_y_true}")
         print(f"Saved average covariance matrix to {save_path_cov}")
-        
-    
+        print(f"Saved per-sample covariance matrices {tuple(cov_matrices_tensor.shape)} to {save_path_cov_per_sample}")
+
+
     
     
     
@@ -766,6 +776,7 @@ def validate_one_epoch_scbm(
 
     cov_matrix_sum = None
     cov_matrix_count = 0
+    cov_matrix_list = []
 
     with torch.no_grad():
 
@@ -835,12 +846,17 @@ def validate_one_epoch_scbm(
                 y_pred_list.append(target_pred_logits.cpu())
                 y_true_list.append(target_true.cpu())
 
-                sigma_mean_batch = cov.mean(dim=0).cpu()  # [C, C]
+                cov_detached = cov.detach()
+
+                sigma_mean_batch = cov_detached.mean(dim=0).cpu()  # [C, C]
                 if cov_matrix_sum is None:
                     cov_matrix_sum = sigma_mean_batch
                 else:
                     cov_matrix_sum += sigma_mean_batch
                 cov_matrix_count += 1
+
+                # Per-sample covariance matrices [B, C, C]
+                cov_matrix_list.append(cov_detached.float().cpu())
 
             target_loss, concepts_loss, prec_loss, total_loss = loss_fn(
                 concepts_mcmc_probs,
@@ -911,6 +927,9 @@ def validate_one_epoch_scbm(
         cov_matrix_avg = cov_matrix_sum / cov_matrix_count  # [C, C]
         save_path_cov = os.path.join(full_path, "avg_covariance_matrix.pt")
 
+        cov_matrices_tensor = torch.cat(cov_matrix_list, dim=0)  # [N, C, C]
+        save_path_cov_per_sample = os.path.join(full_path, "covariance_matrices.pt")
+
         torch.save(concepts_sample_mean_tensor, save_path_concepts_sample_mean)
         torch.save(concepts_sample_std_tensor, save_path_concepts_sample_std)
         torch.save(concepts_pred_probs_mean_tensor, save_path_concepts_pred_probs_mean)
@@ -921,6 +940,7 @@ def validate_one_epoch_scbm(
         torch.save(y_pred_tensor, save_path_y_pred)
         torch.save(y_true_tensor, save_path_y_true)
         torch.save(cov_matrix_avg, save_path_cov)
+        torch.save(cov_matrices_tensor, save_path_cov_per_sample)
 
         print(f"Saved concepts sample means to {save_path_concepts_sample_mean}")
         print(f"Saved concepts sample stds to {save_path_concepts_sample_std}")
@@ -932,6 +952,7 @@ def validate_one_epoch_scbm(
         print(f"Saved y_pred to {save_path_y_pred}")
         print(f"Saved y_true to {save_path_y_true}")
         print(f"Saved average covariance matrix to {save_path_cov}")
+        print(f"Saved per-sample covariance matrices {tuple(cov_matrices_tensor.shape)} to {save_path_cov_per_sample}")
 
     metrics.reset()
     return metrics_dict
