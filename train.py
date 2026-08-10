@@ -38,7 +38,7 @@ from utils.training import (
     Custom_Metrics,
 )
 from utils.utils import reset_random_seeds
-from datasets.CUB_dataset import create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
+from datasets.CUB_dataset import CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
 from datasets.synthetic_dataset_res_scbm import load_saved_synthetic_data
 
 from utils.data import make_analysis_loader
@@ -124,7 +124,7 @@ def create_experiment_path(config):
 
 
     
-    if config.data.dataset == "CUB":    
+    if config.data.dataset in CUB_FAMILY_DATASETS:
         if config.save_name is not None:
             ex_name = config.save_name + "_" + ex_name
         elif not config.save_name and config.incomplete and config.remove_attribute_groups:
@@ -540,6 +540,12 @@ def train(config):
             batch_size=config.model.val_batch_size,
             num_workers=config.workers,
         )
+        
+        test_analysis_loader = make_analysis_loader(
+            test_loader,
+            batch_size=config.model.val_batch_size,
+            num_workers=config.workers,
+        )
 
         validate_one_epoch(
             val_analysis_loader,
@@ -571,6 +577,21 @@ def train(config):
             metrics_only_for_saving=True,
         )
         
+        validate_one_epoch(
+            test_analysis_loader,
+            model,
+            metrics,
+            t_epochs,
+            config,
+            loss_fn,
+            device,
+            test=False,
+            concept_names_graph=concept_names_graph,
+            log_file=log_file,
+            save_residual_meta_data_folder="test_analysis",
+            metrics_only_for_saving=True,
+        )
+        
 
        
     
@@ -591,7 +612,8 @@ def train(config):
 
 
 def check_CUB_data(config):
-    full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
+    # Incomplete splits only touch the labels, so CUB and TravelingBirds share them.
+    full_path_pkl_dir = os.path.join(config.data.data_path, CUB_LABEL_ROOT, "incomplete_data", config.data.pkl_file_dir)
 
 
     if not os.path.isdir(full_path_pkl_dir):
@@ -661,8 +683,8 @@ def main(config: DictConfig):
     
     check_cluster()
     update_config_paths(config)
-    if config.incomplete and config.data.dataset == "CUB":
-        print("Incomplete CUB run")
+    if config.incomplete and config.data.dataset in CUB_FAMILY_DATASETS:
+        print(f"Incomplete {config.data.dataset} run")
         check_CUB_data(config)
     if config.data.dataset == "synthetic_res_scbm":
         check_synthetic_res_scbm_data(config)

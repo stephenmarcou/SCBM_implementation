@@ -193,3 +193,4 @@ datasets/cifar100/*
 plots/*
 papers/*
 delete_afterwards/*
+datasets/TravelingBirds/*

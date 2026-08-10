@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from datasets.multiclass_synthetic_dataset import get_multiclass_datasets, save_multiclass_data
 from datasets.multilabel_synthetic_dataset import get_multilabel_datasets, load_saved_multilabel_data, save_multilabel_data
 from datasets.synthetic_dataset import get_synthetic_datasets
-from datasets.CUB_dataset import get_CUB_dataloaders
+from datasets.CUB_dataset import CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, get_CUB_dataloaders
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data, save_synthetic_data
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
@@ -102,8 +102,8 @@ def get_data(config_base, config, gen, log_file=None):
 
 
         
-    elif config.dataset == "CUB":
-        print("CUB DATASET")
+    elif config.dataset in CUB_FAMILY_DATASETS:
+        print(f"{config.dataset} DATASET")
         trainset, validset, testset = get_CUB_dataloaders(
             config, config_base.incomplete
         )
@@ -218,10 +218,10 @@ def get_concept_groups(config):
     Returns:
         list: A list of concept names.
     """
-    if config.dataset == "CUB":
+    if config.dataset in CUB_FAMILY_DATASETS:
         # Oracle grouping based on concept type for CUB
         with open(
-            os.path.join(config.data_path, "CUB/CUB_200_2011/concept_names.txt"),
+            os.path.join(config.data_path, CUB_LABEL_ROOT, "CUB_200_2011/concept_names.txt"),
             "r",
         ) as f:
             concept_names = []

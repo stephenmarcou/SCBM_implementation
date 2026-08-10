@@ -38,6 +38,16 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
 
+# TravelingBirds is CUB with the backgrounds swapped: same 200 classes, same 112
+# attributes, same photographer split, same pkl label files. Only the image root differs,
+# so every CUB code path applies unchanged.
+CUB_FAMILY_DATASETS = ("CUB", "TravelingBirds")
+
+# Folder under data_path holding the label pkls and the attribute metadata. Shared by the
+# whole CUB family, including the incomplete splits.
+CUB_LABEL_ROOT = "CUB"
+
+
 class CUB_DatasetGenerator(Dataset): 
     """CUB Dataset object with caching"""
  
@@ -267,14 +277,16 @@ def train_test_split_CUB(config, incomplete):
     data_val = []
     data_test = []
     
+    # Labels always come from the CUB folder, also for TravelingBirds: the two datasets
+    # share the split and the attribute annotations, only the images differ.
     if not incomplete:
-        full_train_pkl_path = os.path.join(config.data_path, "CUB", "class_attr_data_10", "train.pkl")
-        full_val_pkl_path = os.path.join(config.data_path, "CUB", "class_attr_data_10", "val.pkl")
-        full_test_pkl_path = os.path.join(config.data_path, "CUB", "class_attr_data_10", "test.pkl")
+        full_train_pkl_path = os.path.join(config.data_path, CUB_LABEL_ROOT, "class_attr_data_10", "train.pkl")
+        full_val_pkl_path = os.path.join(config.data_path, CUB_LABEL_ROOT, "class_attr_data_10", "val.pkl")
+        full_test_pkl_path = os.path.join(config.data_path, CUB_LABEL_ROOT, "class_attr_data_10", "test.pkl")
     else:
-        full_train_pkl_path = os.path.join(config.data_path, "CUB", "incomplete_data", config.pkl_file_dir, "train.pkl")
-        full_val_pkl_path = os.path.join(config.data_path, "CUB", "incomplete_data", config.pkl_file_dir, "val.pkl")
-        full_test_pkl_path = os.path.join(config.data_path, "CUB", "incomplete_data", config.pkl_file_dir, "test.pkl")
+        full_train_pkl_path = os.path.join(config.data_path, CUB_LABEL_ROOT, "incomplete_data", config.pkl_file_dir, "train.pkl")
+        full_val_pkl_path = os.path.join(config.data_path, CUB_LABEL_ROOT, "incomplete_data", config.pkl_file_dir, "val.pkl")
+        full_test_pkl_path = os.path.join(config.data_path, CUB_LABEL_ROOT, "incomplete_data", config.pkl_file_dir, "test.pkl")
         print(f"Using incomplete dataset with pkl files from {config.pkl_file_dir}")
 
     data_train.extend(
@@ -303,15 +315,40 @@ def train_test_split_CUB(config, incomplete):
             )
         )
     )
-    for dataset in [data_train, data_val, data_test]:
+    
+    split_datasets = {"train": data_train, "val": data_val, "test": data_test}
+    
+    
+    
+    for split_name, dataset in split_datasets.items():
         for i in range(len(dataset)):
-            parts = dataset[i]["img_path"].split("/")
-            index = parts.index("images")
-            end_path = "/".join(parts[index:])
 
-            dataset[i]["img_path"] = os.path.join(
-                config.data_path, "CUB/CUB_200_2011/CUB_200_2011/", end_path
-            )
+            if config.dataset == "CUB":
+                parts = dataset[i]["img_path"].split("/")
+                index = parts.index("images")
+                end_path = "/".join(parts[index:])
+                
+                dataset[i]["img_path"] = os.path.join(
+                    config.data_path, "CUB/CUB_200_2011/CUB_200_2011/", end_path
+                )
+                
+            elif config.dataset == "TravelingBirds":
+                parts = dataset[i]["img_path"].split("/")
+                index = parts.index("images")
+                # For TravelingBirds, the images are stored in train/ and test/ subfolders. No need for the "images" folder in the path.
+                end_path = "/".join(parts[index+1:])
+                
+                
+                
+                if split_name == "train" or split_name == "val":
+                    dataset[i]["img_path"] = os.path.join(
+                        config.data_path, "TravelingBirds/train/", end_path
+                    )
+                else:
+                    dataset[i]["img_path"] = os.path.join(
+                        config.data_path, "TravelingBirds/test/", end_path
+                    )
+                
 
     return data_train, data_val, data_test
 
@@ -414,7 +451,7 @@ def get_attribute_parts_to_indices(config_data):
     #print(old_idx_to_new_idx)
     
 
-    path_attrubute_file = os.path.join(config_data.data_path, "CUB/CUB_200_2011/attributes.txt")
+    path_attrubute_file = os.path.join(config_data.data_path, CUB_LABEL_ROOT, "CUB_200_2011/attributes.txt")
 
 
 
@@ -450,7 +487,7 @@ def create_random_incomplete_dataset_attr_groups(config_data, num_attribute_grou
     
     num_attributes_remaining = config_data.num_concepts - len(remove_attribute_indices)
     
-    path_to_incomplete_data_folder = os.path.join(config_data.data_path, "CUB", config_data.incomplete_dir)
+    path_to_incomplete_data_folder = os.path.join(config_data.data_path, CUB_LABEL_ROOT, config_data.incomplete_dir)
     os.makedirs(path_to_incomplete_data_folder, exist_ok=True)
     
     
@@ -493,7 +530,7 @@ def create_random_incomplete_dataset_attr_groups(config_data, num_attribute_grou
     
     # Modify pkl files and save to new folder
     pkl_files = ["train.pkl", "val.pkl", "test.pkl"]
-    old_folder_path = os.path.join(config_data.data_path, "CUB", "class_attr_data_10")
+    old_folder_path = os.path.join(config_data.data_path, CUB_LABEL_ROOT, "class_attr_data_10")
     for pkl_file in pkl_files:
         pkl_path = os.path.join(old_folder_path, pkl_file)
         data = pickle.load(open(pkl_path, "rb"))
@@ -519,7 +556,7 @@ def create_random_incomplete_dataset_indiv_attr(config_data, ratio_attributes_re
     
     num_attributes_remaining = config_data.num_concepts - len(remove_attribute_indices)
     
-    path_to_incomplete_data_folder = os.path.join(config_data.data_path, "CUB", config_data.incomplete_dir)
+    path_to_incomplete_data_folder = os.path.join(config_data.data_path, CUB_LABEL_ROOT, config_data.incomplete_dir)
     os.makedirs(path_to_incomplete_data_folder, exist_ok=True)
     
     # Create new pkl folder
@@ -574,7 +611,7 @@ def create_random_incomplete_dataset_indiv_attr(config_data, ratio_attributes_re
     
     # Modify pkl files and save to new folder
     pkl_files = ["train.pkl", "val.pkl", "test.pkl"]
-    old_folder_path = os.path.join(config_data.data_path, "CUB", "class_attr_data_10")
+    old_folder_path = os.path.join(config_data.data_path, CUB_LABEL_ROOT, "class_attr_data_10")
     for pkl_file in pkl_files:
         pkl_path = os.path.join(old_folder_path, pkl_file)
         data = pickle.load(open(pkl_path, "rb"))

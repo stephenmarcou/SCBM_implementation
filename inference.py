@@ -22,7 +22,7 @@ from utils.utils import reset_random_seeds
 import torch
 from torch.utils.data import DataLoader
 from models.models import create_model
-from datasets.CUB_dataset import CUB_DatasetGenerator, get_CUB_transforms
+from datasets.CUB_dataset import CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, CUB_DatasetGenerator, get_CUB_transforms
 
 def run(config):
     # Reproducibility
@@ -177,6 +177,12 @@ def run(config):
                 batch_size=config.model.val_batch_size,
                 num_workers=config.workers,
             )
+            
+            test_analysis_loader = make_analysis_loader(
+                test_loader,
+                batch_size=config.model.val_batch_size,
+                num_workers=config.workers,
+            )
 
             
             
@@ -209,11 +215,30 @@ def run(config):
                 save_residual_meta_data_folder="train",
                 metrics_only_for_saving=True,
             )
+            
+            validate_one_epoch(
+                test_analysis_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file_inference,
+                save_residual_meta_data_folder="test_analysis",
+                metrics_only_for_saving=True,
+            )
+            
+            
+            
+            
 
             # Same train images, but with the deterministic (test-time) transform instead
             # of the training-time augmentation, so train-vs-test logit comparisons aren't
             # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
-            if config.data.dataset == "CUB":
+            if config.data.dataset in CUB_FAMILY_DATASETS:
                 _, test_transform = get_CUB_transforms()
                 train_clean_dataset = CUB_DatasetGenerator(
                     train_loader.dataset.data, transform=test_transform, cache=False
@@ -287,7 +312,7 @@ def run(config):
             # Same train images, but with the deterministic (test-time) transform instead
             # of the training-time augmentation, so train-vs-test logit comparisons aren't
             # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
-            if config.data.dataset == "CUB":
+            if config.data.dataset in CUB_FAMILY_DATASETS:
                 _, test_transform = get_CUB_transforms()
                 train_clean_dataset = CUB_DatasetGenerator(
                     train_loader.dataset.data, transform=test_transform, cache=False
@@ -357,11 +382,19 @@ def run(config):
                 save_concept_meta_data_folder="train",
                 metrics_only_for_saving=True,
             )
+            
+            
+            
+            
+            
+            
+            
+            
 
             # Same train images, but with the deterministic (test-time) transform instead
             # of the training-time augmentation, so train-vs-test logit comparisons aren't
             # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
-            if config.data.dataset == "CUB":
+            if config.data.dataset in CUB_FAMILY_DATASETS:
                 _, test_transform = get_CUB_transforms()
                 train_clean_dataset = CUB_DatasetGenerator(
                     train_loader.dataset.data, transform=test_transform, cache=False
@@ -492,7 +525,7 @@ def update_pkl_dir_and_num_concepts(config):
         # Update num concepts and num residuals to create right model 
         print(f"info_line_dict: {info_line_dict}")
         config.data.num_concepts = info_line_dict["data"]["num_concepts"]
-        if config.model.model == "scbm_residual":
+        if config.model.model in ("scbm_residual", "cbm_residual"):
             config.data.num_residuals = info_line_dict["data"]["num_residuals"]
         
         # For synhetic dataset
@@ -501,8 +534,8 @@ def update_pkl_dir_and_num_concepts(config):
             config.data.save_data = True
     
     # Ensure that the pkl directory exists
-    if config.data.dataset == "CUB":
-        full_path_pkl_dir = os.path.join(config.data.data_path, "CUB", "incomplete_data", config.data.pkl_file_dir)
+    if config.data.dataset in CUB_FAMILY_DATASETS:
+        full_path_pkl_dir = os.path.join(config.data.data_path, CUB_LABEL_ROOT, "incomplete_data", config.data.pkl_file_dir)
         if not os.path.exists(full_path_pkl_dir):
             raise ValueError(f"Pickle directory {full_path_pkl_dir} does not exist.")
 
