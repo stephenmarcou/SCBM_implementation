@@ -499,19 +499,43 @@ def get_experiment_path(config):
 
 
 
+def read_run_config(config):
+    """Config dict the run was trained with, stored on the first line of its log.txt."""
+    experiment_path = get_experiment_path(config)
+    with open(os.path.join(experiment_path, "log.txt"), "r") as f:
+        return ast.literal_eval(f.readlines()[0])
+
+
+def update_num_concepts_and_residuals(config, info_line_dict):
+    """Restore the channel dimensions the checkpoint was trained with.
+
+    Without this the model is built from the yaml defaults, which only match the
+    checkpoint for a complete run trained with the default num_residuals.
+    """
+    config.data.num_concepts = info_line_dict["data"]["num_concepts"]
+    if config.model.model in ("scbm_residual", "cbm_residual"):
+        if "num_residuals" in info_line_dict["data"]:
+            config.data.num_residuals = info_line_dict["data"]["num_residuals"]
+        else:
+            print(
+                f"Warning: no num_residuals in log.txt, keeping config value "
+                f"{config.data.num_residuals}"
+            )
+
+
 # Need to change this function
 def update_pkl_dir_and_num_concepts(config):
-    
+
     experiment_path = get_experiment_path(config)
 
 
-    
-    
+
+
     with open(os.path.join(experiment_path, "log.txt"), "r") as f:
         lines = f.readlines()
         info_line = lines[0]
         info_line_dict = ast.literal_eval(info_line)
-        
+
         if config.data.dataset != "synthetic_res_scbm":
             pkl_file_dir = info_line_dict["data"]["pkl_file_dir"]
             pkl_file_dir = pkl_file_dir.strip("/")
@@ -522,12 +546,10 @@ def update_pkl_dir_and_num_concepts(config):
             data_dir_name = get_data_dir_name_synthetic_data(experiment_path)
             config.data.data_dir_name = data_dir_name
         
-        # Update num concepts and num residuals to create right model 
+        # Update num concepts and num residuals to create right model
         print(f"info_line_dict: {info_line_dict}")
-        config.data.num_concepts = info_line_dict["data"]["num_concepts"]
-        if config.model.model in ("scbm_residual", "cbm_residual"):
-            config.data.num_residuals = info_line_dict["data"]["num_residuals"]
-        
+        update_num_concepts_and_residuals(config, info_line_dict)
+
         # For synhetic dataset
         if config.data.dataset == "synthetic_res_scbm":
             config.model.encoder_arch = info_line_dict["model"]["encoder_arch"]
@@ -578,7 +600,11 @@ def main(config: DictConfig):
     if config.incomplete:
         print("Incomplete run")
         update_pkl_dir_and_num_concepts(config)
-    
+    else:
+        # Complete run: pkl_file_dir is the config default, but the channel
+        # dimensions still have to come from the run itself
+        update_num_concepts_and_residuals(config, read_run_config(config))
+
     
     
     

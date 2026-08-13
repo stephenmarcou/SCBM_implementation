@@ -48,8 +48,12 @@ def intervene_scbm(
     #policies = config.model.inter_policy.split(",")
     #strategies = config.model.inter_strategy.split(",")
     
+
     policies = ["random"]
-    strategies = ["conf_interval_optimal"]
+    strategies = [config.model.inter_strategy] # ["conf_interval_optimal"]
+    print(f"Intervention strategy: {strategies}, policy: {policies}")
+    with open(log_file, "a") as f:
+        f.write(f"Intervention strategy: {strategies}, policy: {policies}\n")
     
     
     # I changed from min(config.data.num_concepts, 200)
@@ -1091,10 +1095,12 @@ def intervene_cbm(
         None
     """
     model.eval()
-    policies = config.model.inter_policy.split(",")
-    strategies = config.model.inter_strategy.split(",")
+
     policies = ["random"]
-    strategies = ["conf_interval_optimal"]
+    strategies = [config.model.inter_strategy]
+    print(f"Intervention strategy: {strategies}, policy: {policies}")
+    with open(log_file, "a") as f:
+        f.write(f"Intervention strategy: {strategies}, policy: {policies}\n")
     
     
     
@@ -1651,9 +1657,9 @@ class SCBM_Strategy:
             tuple: A tuple containing the intervened-on concept means, covariances, MCMC sampled concept probabilities, and logits.
                     Note that the probabilities are set to 0/1 for the intervened-on concepts according to the ground-truth.
         """
-        num_intervened = c_mask.sum(1)[0]
+        num_intervened = int(c_mask.sum(1)[0].item())
         device = c_mask.device
-        
+
 
         if self.residual:
             # expand c_true and c_mask to include residuals (which are not intervened on, so mask is 0 and true is 0)
@@ -1661,11 +1667,7 @@ class SCBM_Strategy:
             zeros_residual = torch.zeros(batch_size, self.num_residuals, device=c_true.device, dtype=c_true.dtype)
             c_true = torch.cat([c_true, zeros_residual], dim=1)
             c_mask = torch.cat([c_mask, torch.zeros_like(zeros_residual)], dim=1)
-        
-        # I changed
-            num_intervened = int(num_intervened.item())
-            
-        
+
         if num_intervened == 0:
             # No intervention
             interv_mu = c_mu
