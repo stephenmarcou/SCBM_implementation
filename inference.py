@@ -62,17 +62,28 @@ def run(config):
     
     
     
+    # Which split to evaluate / intervene on. 'test' keeps the historical file names, any other
+    # split gets its own log so a val run does not overwrite the test results of the same model.
+    eval_split = config.inference.get("eval_split", "test")
+    if eval_split not in ("test", "val", "train"):
+        raise ValueError(
+            f"inference.eval_split must be one of ['test', 'val', 'train'], got {eval_split}."
+        )
+    split_suffix = "" if eval_split == "test" else f"_{eval_split}"
+
     # Set up logging
     if config.run_inference == True:
-        log_file_inference = experiment_path / "inference_log.txt"
+        log_file_inference = experiment_path / f"inference_log{split_suffix}.txt"
         with open(log_file_inference, "w") as f:
             f.write(f"Inference log for experiment: {experiment_path}\n")
+            f.write(f"Evaluation split: {eval_split}\n")
 
 
     if config.run_interventions == True:
-        log_file = experiment_path / "intervention_log.txt"
+        log_file = experiment_path / f"intervention_log{split_suffix}.txt"
         with open(log_file, "w") as f:
             f.write(f"Intervention log for experiment: {experiment_path}\n")
+            f.write(f"Intervention split: {eval_split}\n")
 
 
 
@@ -108,7 +119,16 @@ def run(config):
     gen,
     log_file=log_file_inference if config.run_inference else log_file
     )
-    
+
+    # The train/val loaders are shuffled, so wrap the chosen split in an analysis loader to get a
+    # deterministic, complete pass (matters because the saved c_mu/res_mu artifacts are order-dependent).
+    # For 'test' this is a no-op: the test loader is already unshuffled with drop_last=False.
+    eval_loader = make_analysis_loader(
+        {"train": train_loader, "val": val_loader, "test": test_loader}[eval_split],
+        batch_size=config.model.val_batch_size,
+        num_workers=config.workers,
+    )
+
 
     
     # Get concept names for plotting
@@ -138,19 +158,19 @@ def run(config):
     if config.run_inference == True:
         if config.model.model in ("cbm", "cbm_residual"):
             validate_one_epoch = validate_one_epoch_cbm
-            test_save_kwargs = {"save_concept_meta_data_folder": "test"}
+            test_save_kwargs = {"save_concept_meta_data_folder": eval_split}
         elif config.model.model == "scbm":
             validate_one_epoch = validate_one_epoch_scbm
-            test_save_kwargs = {"save_concept_meta_data_folder": "test"}
+            test_save_kwargs = {"save_concept_meta_data_folder": eval_split}
         elif config.model.model == "scbm_residual":
             validate_one_epoch = validate_one_epoch_scbm_residual
-            test_save_kwargs = {"save_residual_meta_data_folder": "test"}
+            test_save_kwargs = {"save_residual_meta_data_folder": eval_split}
 
         #save_concept_target_pred = config.inference.save_concept_target_pred
 
-        print("\nEVALUATION ON THE TEST SET:\n")
+        print(f"\nEVALUATION ON THE {eval_split.upper()} SET:\n")
         validate_one_epoch(
-            test_loader,
+            eval_loader,
             model,
             metrics,
             t_epochs,
@@ -434,9 +454,9 @@ def run(config):
             # CHANGE AFTERWARDS
             intervene = intervene_scbm_residual_optimized
         # Intervention curves
-        print("\nPERFORMING INTERVENTIONS:\n")
+        print(f"\nPERFORMING INTERVENTIONS ON THE {eval_split.upper()} SET:\n")
         intervene(
-            train_loader, test_loader, model, metrics, t_epochs, config, loss_fn, device, log_file=log_file
+            train_loader, eval_loader, model, metrics, t_epochs, config, loss_fn, device, log_file=log_file
         )
 
     wandb.finish(quiet=True)

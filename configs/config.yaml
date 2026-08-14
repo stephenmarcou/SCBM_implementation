@@ -23,3 +23,6 @@ logging:
 inference:
   ex_name: null
   save_concept_target_pred: False # Whether to save the predicted concepts and targets for each test set instance during inference [True, False]
+  eval_split: 'test' # Which split to evaluate (and intervene) on ['test', 'val', 'train']. 'val' is the in-distribution
+                     # check for TravelingBirds, whose test split has different backgrounds than train/val.
+                     # Non-'test' splits write to inference_log_<split>.txt / intervention_log_<split>.txt.
