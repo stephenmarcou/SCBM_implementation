@@ -71,12 +71,26 @@ def run(config):
         )
     split_suffix = "" if eval_split == "test" else f"_{eval_split}"
 
+    # TravelingBirds full-render sweep: artifact-only, no evaluation log (see run_tb_render_sweep).
+    tb_all_renders = config.inference.get("tb_all_renders", False)
+
     # Set up logging
     if config.run_inference == True:
-        log_file_inference = experiment_path / f"inference_log{split_suffix}.txt"
-        with open(log_file_inference, "w") as f:
-            f.write(f"Inference log for experiment: {experiment_path}\n")
-            f.write(f"Evaluation split: {eval_split}\n")
+        if tb_all_renders:
+            # The sweep evaluates every split, so it gets its own log rather than an
+            # inference_log named after a single split (which is left untouched).
+            log_file_inference = experiment_path / "tb_render_sweep_log.txt"
+            with open(log_file_inference, "w") as f:
+                f.write(f"TravelingBirds render sweep log for experiment: {experiment_path}\n")
+                f.write(
+                    "Every split evaluated against both image roots: "
+                    "train/ = class-correlated background, test/ = random background.\n"
+                )
+        else:
+            log_file_inference = experiment_path / f"inference_log{split_suffix}.txt"
+            with open(log_file_inference, "w") as f:
+                f.write(f"Inference log for experiment: {experiment_path}\n")
+                f.write(f"Evaluation split: {eval_split}\n")
 
 
     if config.run_interventions == True:
@@ -168,6 +182,23 @@ def run(config):
 
         #save_concept_target_pred = config.inference.save_concept_target_pred
 
+        # Artifact-only mode: the sweep already covers every split against both image roots,
+        # so the single-split evaluation and the default dumps below are skipped.
+        if tb_all_renders:
+            run_tb_render_sweep(
+                config,
+                {"train": train_loader, "val": val_loader, "test": test_loader},
+                validate_one_epoch,
+                model,
+                metrics,
+                t_epochs,
+                loss_fn,
+                device,
+                concept_names_graph,
+                log_file_inference,
+            )
+
+    if config.run_inference == True and not tb_all_renders:
         print(f"\nEVALUATION ON THE {eval_split.upper()} SET:\n")
         validate_one_epoch(
             eval_loader,
@@ -463,8 +494,153 @@ def run(config):
     return None
 
 
+# TravelingBirds ships two renderings of every CUB photo: <data_path>/TravelingBirds/train/
+# (class-correlated background) and <data_path>/TravelingBirds/test/ (random background),
+# 11788 files each. train_test_split_CUB picks the folder by split *name*, so a normal run
+# only ever sees one rendering per photo - half of the 23576 images on disk.
+TB_IMAGE_ROOTS = ("train", "test")
 
-     
+
+def retarget_tb_records(records, data_path, image_root):
+    """Copy split records with img_path repointed at TravelingBirds/<image_root>/.
+
+    The labels are untouched: both renderings show the same bird, only the background differs.
+    """
+    retargeted = []
+    for record in records:
+        class_dir, file_name = record["img_path"].split("/")[-2:]
+        # Keep everything else, just change the image path to the TravelingBirds renderings
+        # The original attributes etc are preserved
+        retargeted.append(
+            {
+                **record,
+                "img_path": os.path.join(
+                    data_path, "TravelingBirds", image_root, class_dir, file_name
+                ),
+            }
+        )
+    return retargeted
+
+
+def save_render_image_paths(records, folder_path):
+    """Write the image paths of one sweep pass, in loader order, next to its artifacts.
+
+    The render loaders are shuffle=False / drop_last=False, so row i of c_res_mu.pt (and of
+    every other saved tensor) is the image on line i of img_paths.txt. Row i of
+    <split>_bg_train and of <split>_bg_test is therefore the same photo on the two
+    backgrounds, which is exactly what the paths file lets you verify.
+    """
+    Path(folder_path).mkdir(parents=True, exist_ok=True)
+    paths_file = os.path.join(folder_path, "img_paths.txt")
+    with open(paths_file, "w") as f:
+        f.write("\n".join(record["img_path"] for record in records) + "\n")
+
+    # Cross-check against an artifact every model type saves: a length mismatch means the
+    # pass did not produce one row per record, and the pairing would be silently misaligned.
+    y_true_path = os.path.join(folder_path, "y_true.pt")
+    if os.path.exists(y_true_path):
+        num_rows = len(torch.load(y_true_path, map_location="cpu"))
+        if num_rows != len(records):
+            raise RuntimeError(
+                f"{folder_path}: {num_rows} saved rows but {len(records)} image paths."
+            )
+    print(f"Saved {len(records)} image paths to {paths_file}")
+
+
+def run_tb_render_sweep(
+    config,
+    loaders,
+    validate_one_epoch,
+    model,
+    metrics,
+    t_epochs,
+    loss_fn,
+    device,
+    concept_names_graph,
+    log_file,
+):
+    """Forward pass over every split x every TravelingBirds image root (all 23576 renders).
+
+    Each pass uses the deterministic test-time transform, so the six combinations are directly
+    comparable, and dumps its concept/residual artifacts to <split>_bg_<root>/ (only when
+    data.save_concept_and_residual_channel is set). log_file is the sweep's own log
+    (tb_render_sweep_log.txt); it also determines the run directory the artifacts land in,
+    since validate_one_epoch derives that from the log file's parent.
+    """
+    if config.data.dataset != "TravelingBirds":
+        raise ValueError(
+            "inference.tb_all_renders only applies to the TravelingBirds dataset, "
+            f"got data.dataset={config.data.dataset}."
+        )
+    if not config.data.save_concept_and_residual_channel:
+        # The artifacts are the only output of this mode, so 23576 forward passes would
+        # otherwise be thrown away.
+        raise ValueError(
+            "inference.tb_all_renders needs data.save_concept_and_residual_channel=True, "
+            "otherwise the sweep saves nothing."
+        )
+
+    # Residual models save under the residual-flavoured kwarg; validate_one_epoch_cbm accepts both.
+    save_kwarg = (
+        "save_residual_meta_data_folder"
+        if config.model.model in ("scbm_residual", "cbm_residual")
+        else "save_concept_meta_data_folder"
+    )
+    _, test_transform = get_CUB_transforms()
+
+    for split, loader in loaders.items():
+        for image_root in TB_IMAGE_ROOTS:
+            # Get right image paths for TravelingBirds
+            records = retarget_tb_records(
+                loader.dataset.data, config.data.data_path, image_root
+            )
+            render_loader = DataLoader(
+                CUB_DatasetGenerator(records, transform=test_transform, cache=False),
+                batch_size=config.model.val_batch_size,
+                shuffle=False,
+                drop_last=False,
+                num_workers=config.workers,
+                pin_memory=True,
+                persistent_workers=config.workers > 0,
+            )
+
+            folder = f"{split}_bg_{image_root}"
+            header = (
+                f"\nsplit: {split}, image root: {image_root}/ "
+                f"({len(records)} images) -> {folder}/"
+            )
+            print(header)
+
+            # metrics_only_for_saving keeps validate_one_epoch from writing its own
+            # "Validation:" line and from overwriting the same wandb keys six times over;
+            # the metrics are recorded below under a name identifying the combination.
+            metrics_dict = validate_one_epoch(
+                render_loader,
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file,
+                metrics_only_for_saving=True,
+                **{save_kwarg: folder},
+            )
+
+            save_render_image_paths(records, os.path.join(os.path.dirname(log_file), folder))
+
+            summary = " ".join(f"{k}: {v:.3f}" for k, v in metrics_dict.items())
+            print(summary + "\n")
+            with open(log_file, "a") as f:
+                f.write(header + "\n" + summary + "\n")
+            wandb.log(
+                {f"tb_render_sweep/{folder}/{k}": v for k, v in metrics_dict.items()}
+            )
+
+
+
 def get_data_dir_name_synthetic_data(experiment_path):
 
     """

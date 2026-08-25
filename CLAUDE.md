@@ -258,6 +258,28 @@ Key points:
 - `run_interventions=True` — intervention curves (writes `intervention_log.txt`). For
   `scbm_residual` this currently uses `intervene_scbm_residual_optimized` (the
   non-optimized `intervene_scbm_residual` is commented out).
+- `inference.tb_all_renders=True` (TravelingBirds only) — the full-render sweep. A normal
+  run touches only 11788 of the 23576 rendered images, because `train_test_split_CUB`
+  picks the image folder by split *name*: train/val read `TravelingBirds/train/`
+  (class-correlated backgrounds), test reads `TravelingBirds/test/` (random backgrounds),
+  while each folder holds a rendering of **all** 11788 CUB photos. The sweep
+  (`run_tb_render_sweep` in `inference.py`) runs each split against *both* image roots
+  with the deterministic test transform — 6 passes, 23576 forward passes, every file on
+  disk exactly once. `<split>_bg_train` vs `<split>_bg_test` is the sample-aligned
+  background-swap pairing (same bird, same labels, different background) that the analysis
+  notebook otherwise has to build by hand.
+  It *replaces* the standard single-split evaluation and the default `train/`, `val/`,
+  `test_analysis/` dumps. Its main output is the `c_mu`/`res_mu` artifacts in
+  `<split>_bg_<root>/`, so `data.save_concept_and_residual_channel=True` is required — the
+  run errors out without it. Each folder also gets an **`img_paths.txt`**: the image paths
+  in loader order, so line *i* names the image behind row *i* of every saved tensor — the
+  way to verify that `<split>_bg_train` and `<split>_bg_test` really are row-aligned (the
+  two files differ only in the `train/` vs `test/` path component). A row-count mismatch
+  against `y_true.pt` raises rather than saving a silently misaligned pairing.
+  Per-combination metrics go to `tb_render_sweep_log.txt` (the sweep's own log —
+  `inference_log*.txt` is never touched, since the sweep is not tied to one split), to
+  stdout, and to wandb under `tb_render_sweep/<split>_bg_<root>/`. `run_interventions` is
+  unaffected.
 
 ### Hyperparameter search
 

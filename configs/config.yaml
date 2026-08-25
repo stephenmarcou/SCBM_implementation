@@ -26,3 +26,9 @@ inference:
   eval_split: 'test' # Which split to evaluate (and intervene) on ['test', 'val', 'train']. 'val' is the in-distribution
                      # check for TravelingBirds, whose test split has different backgrounds than train/val.
                      # Non-'test' splits write to inference_log_<split>.txt / intervention_log_<split>.txt.
+  tb_all_renders: False # TravelingBirds only: run every split against *both* image roots (train/ = class-correlated
+                        # background, test/ = random background) instead of only the folder matching the split name.
+                        # Covers all 23576 rendered images. Replaces the standard evaluation and the default
+                        # train/val/test_analysis dumps: saves the concept and residual channels to
+                        # <split>_bg_<root>/ (so it requires data.save_concept_and_residual_channel=True) and
+                        # the per-combination metrics to tb_render_sweep_log.txt. [True, False]
