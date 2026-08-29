@@ -38,7 +38,8 @@ from utils.training import (
     Custom_Metrics,
 )
 from utils.utils import reset_random_seeds
-from datasets.CUB_dataset import CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
+from datasets.Waterbirds_dataset import resolve_waterbirds_target
+from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_LABEL_ROOT, create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
 from datasets.synthetic_dataset_res_scbm import load_saved_synthetic_data
 
 from utils.data import make_analysis_loader
@@ -124,7 +125,11 @@ def create_experiment_path(config):
 
 
     
-    if config.data.dataset in CUB_FAMILY_DATASETS:
+    if config.data.dataset in CUB_CONCEPT_DATASETS:
+        # Waterbirds runs the same concepts against two different targets; without this the
+        # 2-class and 200-class runs land in one indistinguishable pile of run folders.
+        if config.data.get("binary_target"):
+            ex_name = "binary_target_" + ex_name
         if config.save_name is not None:
             ex_name = config.save_name + "_" + ex_name
         elif not config.save_name and config.incomplete and config.remove_attribute_groups:
@@ -510,6 +515,16 @@ def train(config):
     
     
     
+    # The only thing that differs between the model types here is the name of the kwarg the
+    # validator accepts: validate_one_epoch_scbm only knows save_concept_meta_data_folder and
+    # would swallow the residual one through **kwargs - silently saving nothing. Picking the
+    # name once keeps every model type on the same dump paths. Same idiom as inference.py.
+    save_kwarg = (
+        "save_residual_meta_data_folder"
+        if config.model.model in ("scbm_residual", "cbm_residual")
+        else "save_concept_meta_data_folder"
+    )
+
     print("\nFINAL EVALUATION ON THE TEST SET:\n")
     validate_one_epoch(
         test_loader,
@@ -522,89 +537,44 @@ def train(config):
         test=True,
         concept_names_graph=concept_names_graph,
         log_file=log_file,
-        save_residual_meta_data_folder="test"
+        **{save_kwarg: "test"},
     )
     
     
     # ---------------------------------------------------------
-    # Save residual meta data for analysis of concept discovery
+    # Save concept / residual meta data for analysis of concept discovery
     # ---------------------------------------------------------
-    if config.model.model in ("scbm_residual", "cbm_residual") and config.data.save_concept_and_residual_channel:
-        train_analysis_loader = make_analysis_loader(
-            train_loader,
-            batch_size=config.model.val_batch_size,
-            num_workers=config.workers,
-        )
-        val_analysis_loader = make_analysis_loader(
-            val_loader,
-            batch_size=config.model.val_batch_size,
-            num_workers=config.workers,
-        )
-        
-        test_analysis_loader = make_analysis_loader(
-            test_loader,
-            batch_size=config.model.val_batch_size,
-            num_workers=config.workers,
-        )
-
-        validate_one_epoch(
-            val_analysis_loader,
-            model,
-            metrics,
-            t_epochs,
-            config,
-            loss_fn,
-            device,
-            test=False,
-            concept_names_graph=concept_names_graph,
-            log_file=log_file,
-            save_residual_meta_data_folder="val",
-            metrics_only_for_saving=True,
-        )
-
-        validate_one_epoch(
-            train_analysis_loader,
-            model,
-            metrics,
-            t_epochs,
-            config,
-            loss_fn,
-            device,
-            test=False,
-            concept_names_graph=concept_names_graph,
-            log_file=log_file,
-            save_residual_meta_data_folder="train",
-            metrics_only_for_saving=True,
-        )
-        
-        validate_one_epoch(
-            test_analysis_loader,
-            model,
-            metrics,
-            t_epochs,
-            config,
-            loss_fn,
-            device,
-            test=False,
-            concept_names_graph=concept_names_graph,
-            log_file=log_file,
-            save_residual_meta_data_folder="test_analysis",
-            metrics_only_for_saving=True,
-        )
-        
-
-       
-    
+    # test was already dumped by the evaluation pass above.
+    if config.data.save_concept_and_residual_channel:
+        for folder, base_loader in (("val", val_loader), ("train", train_loader)):
+            validate_one_epoch(
+                make_analysis_loader(
+                    base_loader,
+                    batch_size=config.model.val_batch_size,
+                    num_workers=config.workers,
+                ),
+                model,
+                metrics,
+                t_epochs,
+                config,
+                loss_fn,
+                device,
+                test=False,
+                concept_names_graph=concept_names_graph,
+                log_file=log_file,
+                metrics_only_for_saving=True,
+                **{save_kwarg: folder},
+            )
 
     if config.train_only:
         wandb.finish(quiet=True)
         return None
 
     # Intervention curves
-    print("\nPERFORMING INTERVENTIONS:\n")
-    intervene(
-        train_loader, test_loader, model, metrics, t_epochs, config, loss_fn, device
-    )
+    # print("\nPERFORMING INTERVENTIONS:\n")
+    # intervene(
+    #     train_loader, test_loader, model, metrics, t_epochs, config, loss_fn, device
+    # )
 
     wandb.finish(quiet=True)
     return None
@@ -633,6 +603,19 @@ def check_CUB_data(config):
         config.data.num_concepts = len(train_data[0]["attribute_label"])
         
         
+def check_Waterbirds_data(config):
+    """Resolve the Waterbirds target before the config is logged.
+
+    data.binary_target decides the head width, so data.num_classes has to follow it. Doing
+    that here rather than inside get_data matters: main() runs the check_* functions before
+    train() writes the config to the first line of log.txt, so the logged num_classes is the
+    one the model was actually built with. Resolving it later would log num_classes=200 for
+    a 2-class run - and that first line is what inference.py reads the run's setup back out
+    of.
+    """
+    resolve_waterbirds_target(config.data)
+
+
 def check_synthetic_res_scbm_data(config):
     if config.data.data_dir_name is not None:
         train_data, _, _ = load_saved_synthetic_data(config)
@@ -683,9 +666,13 @@ def main(config: DictConfig):
     
     check_cluster()
     update_config_paths(config)
-    if config.incomplete and config.data.dataset in CUB_FAMILY_DATASETS:
+    if config.incomplete and config.data.dataset in CUB_CONCEPT_DATASETS:
         print(f"Incomplete {config.data.dataset} run")
         check_CUB_data(config)
+
+    # Independent of `incomplete`: which of the two labels is the target.
+    if config.data.dataset == "Waterbirds":
+        check_Waterbirds_data(config)
     if config.data.dataset == "synthetic_res_scbm":
         check_synthetic_res_scbm_data(config)
     

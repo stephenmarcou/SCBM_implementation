@@ -26,6 +26,15 @@ inference:
   eval_split: 'test' # Which split to evaluate (and intervene) on ['test', 'val', 'train']. 'val' is the in-distribution
                      # check for TravelingBirds, whose test split has different backgrounds than train/val.
                      # Non-'test' splits write to inference_log_<split>.txt / intervention_log_<split>.txt.
+  tb_image_root: null # TravelingBirds only: force the eval_split to be read from this image root
+                      # ['train' = class-correlated background, 'test' = random background] instead of the
+                      # folder matching the split name. The point is paired ID/OOD comparisons on the *same*
+                      # photos: eval_split=test with tb_image_root=train vs =test differ only in background,
+                      # whereas val-vs-test also differs in photographer. Applies to evaluation *and*
+                      # interventions, uses the deterministic test transform, and writes to
+                      # inference_log_<split>_bg_<root>.txt / intervention_log_<split>_bg_<root>.txt with
+                      # artifacts under <split>_bg_<root>/ (same naming as tb_all_renders, with which it
+                      # cannot be combined).
   tb_all_renders: False # TravelingBirds only: run every split against *both* image roots (train/ = class-correlated
                         # background, test/ = random background) instead of only the folder matching the split name.
                         # Covers all 23576 rendered images. Replaces the standard evaluation and the default

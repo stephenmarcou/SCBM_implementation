@@ -194,8 +194,11 @@ Key flags:
   `num_attribute_groups_remove`; False → individual removal, controlled by
   `ratio_attributes_remove`). To *reuse* an existing incomplete split, pass
   `data.pkl_file_dir=<folder_name>/` and it will be loaded rather than regenerated.
-- `train_only=True` — skip the post-training intervention sweep (`intervene(...)` in
-  `train.py`), just train + validate + test. Much faster for iterating.
+- `train_only=True` — **currently a no-op.** It used to skip the post-training intervention
+  sweep, but the `intervene(...)` call in `train.py` is commented out, so every run is
+  train + validate + test either way. Interventions are run post-hoc on a saved checkpoint
+  via `inference.py run_interventions=True` (§7). Left in place so existing commands and
+  sbatch scripts keep working; passing it buys nothing.
 - `save_model=True` — required to persist anything to disk (checkpoints, logs, saved
   covariance / concept-residual artifacts). Without it the run is ephemeral (still logs
   to wandb unless `logging.mode=disabled`, which is the config default).
@@ -249,12 +252,21 @@ Key points:
   `data.num_residuals` — so you don't have to re-pass them. It then asserts that
   `<data_path>/CUB/incomplete_data/<pkl_file_dir>` still exists and raises otherwise.
   Do **not** delete incomplete-data folders that saved runs point at.
-- `run_inference=True` — test-set evaluation (writes `inference_log.txt`). For
-  `scbm_residual` with `data.save_concept_and_residual_channel=True`, it additionally
-  re-runs the val and train sets through shuffle-free "analysis loaders"
-  (`make_analysis_loader`) to dump `c_mu`/`res_mu` artifacts into `test/`, `val/`,
-  `train/` subfolders of the run directory — this is how notebook analysis inputs are
-  (re)generated from an existing checkpoint.
+- `run_inference=True` — test-set evaluation (writes `inference_log.txt`). With
+  `data.save_concept_and_residual_channel=True`, it additionally re-runs the remaining
+  splits through shuffle-free "analysis loaders" (`make_analysis_loader`) to dump
+  `c_mu`/`res_mu` artifacts into `test/`, `val/`, `train/` (plus
+  `train_with_test_transform/` for the CUB family) subfolders of the run directory — this
+  is how notebook analysis inputs are (re)generated from an existing checkpoint. The split
+  named by `inference.eval_split` is skipped there: the evaluation pass already dumped it
+  to that same folder through an equivalent loader.
+  This is **one code path for every model type**, not one per model. The only thing that
+  varies is the kwarg name the validator accepts — `save_residual_meta_data_folder` for
+  `scbm_residual` / `cbm_residual`, `save_concept_meta_data_folder` otherwise — chosen once
+  into `save_kwarg` (same idiom as `run_tb_render_sweep`, and mirrored in `train.py`).
+  Getting it wrong fails **silently**: `validate_one_epoch_scbm` swallows the residual kwarg
+  through `**kwargs` and saves nothing, so always route new model types through `save_kwarg`
+  rather than passing a folder kwarg by hand.
 - `run_interventions=True` — intervention curves (writes `intervention_log.txt`). For
   `scbm_residual` this currently uses `intervene_scbm_residual_optimized` (the
   non-optimized `intervene_scbm_residual` is commented out).
@@ -269,7 +281,7 @@ Key points:
   background-swap pairing (same bird, same labels, different background) that the analysis
   notebook otherwise has to build by hand.
   It *replaces* the standard single-split evaluation and the default `train/`, `val/`,
-  `test_analysis/` dumps. Its main output is the `c_mu`/`res_mu` artifacts in
+  `test/` dumps. Its main output is the `c_mu`/`res_mu` artifacts in
   `<split>_bg_<root>/`, so `data.save_concept_and_residual_channel=True` is required — the
   run errors out without it. Each folder also gets an **`img_paths.txt`**: the image paths
   in loader order, so line *i* names the image behind row *i* of every saved tensor — the
@@ -280,6 +292,28 @@ Key points:
   `inference_log*.txt` is never touched, since the sweep is not tied to one split), to
   stdout, and to wandb under `tb_render_sweep/<split>_bg_<root>/`. `run_interventions` is
   unaffected.
+- `inference.tb_image_root=train|test` (TravelingBirds only) — read `eval_split` from that
+  image root instead of the folder matching the split name, for **evaluation and
+  interventions alike**. This is the intervention-curve counterpart of the sweep: the sweep
+  only dumps artifacts, so paired ID/OOD *intervention* curves need this flag. Two runs at
+  `eval_split=test` with `tb_image_root=train` (class-correlated background = ID) and
+  `=test` (random background = OOD) differ only in the background — same photos, same
+  labels, same held-out photographers — whereas the older `eval_split=val` vs `test` ID/OOD
+  pairing also swaps the photographers *and* leans on the split that early stopping selected
+  on. Prefer `test_bg_train` over `val` for the ID curve.
+  Implementation: `build_tb_retargeted_loader` in `inference.py` (shared with the sweep) —
+  deterministic test transform, `shuffle=False`, `drop_last=False`, so rows stay aligned
+  across the two roots. The evaluation log goes to `inference_log_<split>_bg_<root>.txt` at the
+  run root and the artifacts to `<split>_bg_<root>/` (plus `img_paths.txt`), matching the
+  sweep's naming; the intervention curve is written *inside* that folder as
+  `<split>_bg_<root>/intervention_log.txt` (the folder is created if interventions are run
+  without a preceding inference pass), so each background's curve sits next to the `c_mu` /
+  `res_mu` it was measured on. The run root's historical `intervention_log.txt` is never
+  overwritten. Mutually exclusive with `tb_all_renders`. The default `train/`, `val/`,
+  `test/` dumps are skipped under the override — they read the default image root,
+  so they would just re-derive existing artifacts over extra full passes.
+  The intervention *strategy* is still fitted on `train_loader` at its default root, which is
+  what you want: fixed across both curves.
 
 ### Hyperparameter search
 

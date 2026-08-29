@@ -47,6 +47,13 @@ CUB_FAMILY_DATASETS = ("CUB", "TravelingBirds")
 # whole CUB family, including the incomplete splits.
 CUB_LABEL_ROOT = "CUB"
 
+# Datasets built on CUB's 112-attribute concept space, whose concept annotations and
+# incomplete splits therefore live under CUB_LABEL_ROOT. Superset of CUB_FAMILY_DATASETS:
+# Waterbirds reuses the concepts, the concept names and the incomplete-split machinery, but
+# has its own train/val boundary and a binary label, so it is *not* interchangeable on the
+# split / image-root code paths that CUB_FAMILY_DATASETS guards.
+CUB_CONCEPT_DATASETS = CUB_FAMILY_DATASETS + ("Waterbirds",)
+
 
 class CUB_DatasetGenerator(Dataset): 
     """CUB Dataset object with caching"""

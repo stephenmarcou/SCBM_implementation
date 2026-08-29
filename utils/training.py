@@ -1334,7 +1334,7 @@ class Custom_Metrics(Metric):
             
         else:
             # dim=1 to normalize across classes for multi-class classification for each sample
-            # Even with log_probabilities, we can use softmax to get probabilities for each class, check one note
+            # Even with log_probabilities, we can use softmax to get probabilities for each class, check onenote
             y_pred_probs = nn.Softmax(dim=1)(y_pred_logits)
             y_pred = y_pred_logits.argmax(dim=-1)
 

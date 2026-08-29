@@ -1,0 +1,32 @@
+# --------------------------
+#         Dataset
+# --------------------------
+defaults:
+  - data_defaults # Inherit data_defaults arguments
+dataset: 'Waterbirds' # Name of the dataset
+binary_target: False # Which label is the target. False (default) = CUB's 200-way species
+                     # label, which keeps Waterbirds comparable with the CUB / TravelingBirds
+                     # runs and leaves a 112-concept bottleneck a task worth solving.
+                     # True = the benchmark's binary landbird/waterbird label, the one the
+                     # spurious background correlation is defined against.
+                     # Switch it from the command line: data.binary_target=True
+num_classes: 200 # Number of the classes of the target variable (CUB's 200 species).
+                 # Do NOT set this by hand to run the 2-class experiment - use binary_target,
+                 # which forces num_classes=2 in train_test_split_Waterbirds before the model
+                 # and loss are built. Setting it to anything but 200 while binary_target is
+                 # False is rejected there, since it would silently mismatch the labels.
+num_concepts: 112 # Number of concepts in dataset (CUB's 112 binary attributes)
+num_residuals: 30 # Number of residuals
+pkl_file_dir: 'class_attr_data_10/' # Directory of the CUB pkl files providing the concepts (relative to data_path)
+save_predicted_concepts_residuals: false # Whether to save the predicted concepts and residuals for each data point, only applicable for synthetic dataset
+save_residual_channel: false
+save_concept_and_residual_channel: false # Whether to save the predicted concepts and residuals for each data point, only applicable for synthetic dataset
+
+
+
+# Incomplete dataset parameters
+# Incomplete splits are shared with CUB: they only rewrite the attribute labels, which
+# Waterbirds joins by CUB image id. Reuse one with data.pkl_file_dir=<folder>/.
+# num_attribute_groups_remove: 14 # Number of attribute groups to remove when creating incomplete datasets. Only used if incomplete is True. Should be between 0 and 28 for CUB.
+# remove_attribute_groups: False # Whether to create an incomplete dataset by removing entire attribute groups, or by randomly removing individual attributes across groups. Only used if incomplete is True. [True, False]
+# ratio_attributes_remove: 0.5 # Ratio of attributes to remove when creating incomplete datasets by randomly removing individual attributes across groups. Only used if incomplete is True and remove_attribute_groups is False. Should be between 0 and 1.

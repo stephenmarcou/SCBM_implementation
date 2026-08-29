@@ -16,6 +16,7 @@ from datasets.multilabel_synthetic_dataset import load_saved_multilabel_data
 from utils.utils import reset_random_seeds
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from datasets.CUB_dataset import CUB_FAMILY_DATASETS, get_CUB_dataloaders
+from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data
 
 from sklearn.metrics import roc_auc_score
@@ -241,6 +242,13 @@ def get_dataloaders(config, gen):
         print(f"{dataset} DATASET")
     
         train_data, val_data, test_data = get_CUB_dataloaders(
+            config.data, config.incomplete
+        )
+
+    elif dataset == "Waterbirds":
+        print("Waterbirds DATASET")
+
+        train_data, val_data, test_data = get_Waterbirds_dataloaders(
             config.data, config.incomplete
         )
         

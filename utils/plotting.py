@@ -11,7 +11,7 @@ import seaborn as sns
 from scipy.cluster.hierarchy import linkage, dendrogram
 import wandb
 
-from datasets.CUB_dataset import CUB_FAMILY_DATASETS
+from datasets.CUB_dataset import CUB_CONCEPT_DATASETS
 
 
 def plot_heatmap(
@@ -77,7 +77,7 @@ def compute_and_plot_heatmap(
     matrix, concepts_true, concept_names_graph, config, log_name=None
 ):
     # Reorder CUB concepts to group colors&shapes instead of concept groups
-    if config.data.dataset in CUB_FAMILY_DATASETS:
+    if config.data.dataset in CUB_CONCEPT_DATASETS:
         new_group = np.array(
             [
                 (name.split(": ")[1] if not name.isdigit() else name)

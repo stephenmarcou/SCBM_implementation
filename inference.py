@@ -22,7 +22,8 @@ from utils.utils import reset_random_seeds
 import torch
 from torch.utils.data import DataLoader
 from models.models import create_model
-from datasets.CUB_dataset import CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, CUB_DatasetGenerator, get_CUB_transforms
+from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_LABEL_ROOT, CUB_DatasetGenerator, get_CUB_transforms
+from datasets.Waterbirds_dataset import NUM_CUB_SPECIES, resolve_waterbirds_target
 
 def run(config):
     # Reproducibility
@@ -69,12 +70,54 @@ def run(config):
         raise ValueError(
             f"inference.eval_split must be one of ['test', 'val', 'train'], got {eval_split}."
         )
-    split_suffix = "" if eval_split == "test" else f"_{eval_split}"
-
     # TravelingBirds full-render sweep: artifact-only, no evaluation log (see run_tb_render_sweep).
     tb_all_renders = config.inference.get("tb_all_renders", False)
 
-    # Set up logging
+    # Override the image root the eval split is read from, so the same photos can be evaluated on
+    # both backgrounds (see build_tb_retargeted_loader). None = the historical behaviour, where
+    # train_test_split_CUB picks the folder by split name.
+    tb_image_root = config.inference.get("tb_image_root", None)
+    if tb_image_root is not None:
+        # Validate the image root is test or train (backgrounds)
+        if tb_image_root not in TB_IMAGE_ROOTS:
+            raise ValueError(
+                f"inference.tb_image_root must be one of {list(TB_IMAGE_ROOTS)}, got {tb_image_root}."
+            )
+        if config.data.dataset != "TravelingBirds":
+            raise ValueError(
+                "inference.tb_image_root only applies to the TravelingBirds dataset, "
+                f"got data.dataset={config.data.dataset}."
+            )
+        if tb_all_renders:
+            raise ValueError(
+                "inference.tb_image_root and inference.tb_all_renders are mutually exclusive: "
+                "the sweep already covers every split against both image roots."
+            )
+
+
+    # --------------------------------
+    # Folder naming to save artifacts and logs
+    # -------------------------------
+    # 'test' with no root override keeps the historical file names; anything else gets its own log
+    # so a val run (or the other background) does not overwrite the test results of the same model.
+    if tb_image_root is not None:
+        # Same naming as the sweep, so both routes produce comparable folders.
+        split_suffix = f"_{eval_split}_bg_{tb_image_root}"
+    elif eval_split == "test":
+        split_suffix = ""
+    else:
+        split_suffix = f"_{eval_split}"
+    # Folder the c_mu/res_mu artifacts are dumped to; matches the split's own folder by default.
+    eval_save_folder = f"{eval_split}_bg_{tb_image_root}" if tb_image_root is not None else eval_split
+    # Line recorded in both logs so a curve can be traced back to the background it was measured on.
+    split_header = f"{eval_split}"
+    if tb_image_root is not None:
+        background = "class-correlated" if tb_image_root == "train" else "random"
+        split_header += f" (images from TravelingBirds/{tb_image_root}/, {background} background)"
+
+    #-------------------------------
+    #   Logs
+    #-------------------------------
     if config.run_inference == True:
         if tb_all_renders:
             # The sweep evaluates every split, so it gets its own log rather than an
@@ -90,14 +133,22 @@ def run(config):
             log_file_inference = experiment_path / f"inference_log{split_suffix}.txt"
             with open(log_file_inference, "w") as f:
                 f.write(f"Inference log for experiment: {experiment_path}\n")
-                f.write(f"Evaluation split: {eval_split}\n")
+                f.write(f"Evaluation split: {split_header}\n")
 
 
     if config.run_interventions == True:
-        log_file = experiment_path / f"intervention_log{split_suffix}.txt"
+        if tb_image_root is not None:
+            # Keep the curve next to the c_mu/res_mu artifacts it was measured on, so a
+            # <split>_bg_<root>/ folder is self-contained. The folder normally already exists
+            # from an earlier inference run, but interventions can be run on their own.
+            log_dir = experiment_path / eval_save_folder
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "intervention_log.txt"
+        else:
+            log_file = experiment_path / f"intervention_log{split_suffix}.txt"
         with open(log_file, "w") as f:
             f.write(f"Intervention log for experiment: {experiment_path}\n")
-            f.write(f"Intervention split: {eval_split}\n")
+            f.write(f"Intervention split: {split_header}\n")
 
 
 
@@ -134,14 +185,25 @@ def run(config):
     log_file=log_file_inference if config.run_inference else log_file
     )
 
-    # The train/val loaders are shuffled, so wrap the chosen split in an analysis loader to get a
-    # deterministic, complete pass (matters because the saved c_mu/res_mu artifacts are order-dependent).
-    # For 'test' this is a no-op: the test loader is already unshuffled with drop_last=False.
-    eval_loader = make_analysis_loader(
-        {"train": train_loader, "val": val_loader, "test": test_loader}[eval_split],
-        batch_size=config.model.val_batch_size,
-        num_workers=config.workers,
-    )
+    split_loader = {"train": train_loader, "val": val_loader, "test": test_loader}[eval_split]
+
+    # --------------------------------
+    # TravelingBirds background override, so we use the specified background
+    # --------------------------------
+    if tb_image_root is not None:
+        # Same records (same birds, same labels), read from the other rendering.
+        eval_loader = build_tb_retargeted_loader(config, split_loader, tb_image_root)
+        eval_records = eval_loader.dataset.data
+    else:
+        # The train/val loaders are shuffled, so wrap the chosen split in an analysis loader to get a
+        # deterministic, complete pass (matters because the saved c_mu/res_mu artifacts are order-dependent).
+        # For 'test' this is a no-op: the test loader is already unshuffled with drop_last=False.
+        eval_loader = make_analysis_loader(
+            split_loader,
+            batch_size=config.model.val_batch_size,
+            num_workers=config.workers,
+        )
+        eval_records = None
 
 
     
@@ -172,13 +234,13 @@ def run(config):
     if config.run_inference == True:
         if config.model.model in ("cbm", "cbm_residual"):
             validate_one_epoch = validate_one_epoch_cbm
-            test_save_kwargs = {"save_concept_meta_data_folder": eval_split}
+            test_save_kwargs = {"save_concept_meta_data_folder": eval_save_folder}
         elif config.model.model == "scbm":
             validate_one_epoch = validate_one_epoch_scbm
-            test_save_kwargs = {"save_concept_meta_data_folder": eval_split}
+            test_save_kwargs = {"save_concept_meta_data_folder": eval_save_folder}
         elif config.model.model == "scbm_residual":
             validate_one_epoch = validate_one_epoch_scbm_residual
-            test_save_kwargs = {"save_residual_meta_data_folder": eval_split}
+            test_save_kwargs = {"save_residual_meta_data_folder": eval_save_folder}
 
         #save_concept_target_pred = config.inference.save_concept_target_pred
 
@@ -198,8 +260,9 @@ def run(config):
                 log_file_inference,
             )
 
+    # Still saves concept/residual information given config.data.save_concept_and_residual_channel=true
     if config.run_inference == True and not tb_all_renders:
-        print(f"\nEVALUATION ON THE {eval_split.upper()} SET:\n")
+        print(f"\nEVALUATION ON THE {split_header.upper()} SET:\n")
         validate_one_epoch(
             eval_loader,
             model,
@@ -214,94 +277,58 @@ def run(config):
             **test_save_kwargs,
         )
 
-        # ---------------------------------------------------------
-        # Save residual meta data for analysis of concept discovery
-        # ---------------------------------------------------------
-        if config.model.model in ("scbm_residual", "cbm_residual") and config.data.save_concept_and_residual_channel:
-            train_analysis_loader = make_analysis_loader(
-                train_loader,
-                batch_size=config.model.val_batch_size,
-                num_workers=config.workers,
-            )
-            val_analysis_loader = make_analysis_loader(
-                val_loader,
-                batch_size=config.model.val_batch_size,
-                num_workers=config.workers,
-            )
-            
-            test_analysis_loader = make_analysis_loader(
-                test_loader,
-                batch_size=config.model.val_batch_size,
-                num_workers=config.workers,
+        # eval_records = eval_loader.dataset.data if tb_image_root is not None else None
+        if eval_records is not None and config.data.save_concept_and_residual_channel:
+            # Lets the analysis verify row alignment between the two backgrounds: the two
+            # img_paths.txt differ only in the train/ vs test/ path component.
+            save_render_image_paths(
+                eval_records, os.path.join(experiment_path, eval_save_folder)
             )
 
-            
-            
-            validate_one_epoch(
-                val_analysis_loader,
-                model,
-                metrics,
-                t_epochs,
-                config,
-                loss_fn,
-                device,
-                test=False,
-                concept_names_graph=concept_names_graph,
-                log_file=log_file_inference,
-                save_residual_meta_data_folder="val",
-                metrics_only_for_saving=True,
+        # ---------------------------------------------------------
+        # Save concept / residual meta data for analysis of concept discovery
+        # ---------------------------------------------------------
+        # Did inference and saved the c_mu/res_mu artifacts for eval_loader
+        # Here we run a full pass over the other splits to save their c_mu/res_mu artifacts too
+        # eval_loader is popped from the analysis_loaders dict so it is not re-run
+        # We do not do this if tb_image_root is set, as then we only want to do it for a very specific 
+        # split background combination
+        if config.data.save_concept_and_residual_channel and tb_image_root is None:
+            save_kwarg = (
+                "save_residual_meta_data_folder"
+                if config.model.model in ("scbm_residual", "cbm_residual")
+                else "save_concept_meta_data_folder"
             )
 
-            validate_one_epoch(
-                train_analysis_loader,
-                model,
-                metrics,
-                t_epochs,
-                config,
-                loss_fn,
-                device,
-                test=False,
-                concept_names_graph=concept_names_graph,
-                log_file=log_file_inference,
-                save_residual_meta_data_folder="train",
-                metrics_only_for_saving=True,
-            )
-            
-            validate_one_epoch(
-                test_analysis_loader,
-                model,
-                metrics,
-                t_epochs,
-                config,
-                loss_fn,
-                device,
-                test=False,
-                concept_names_graph=concept_names_graph,
-                log_file=log_file_inference,
-                save_residual_meta_data_folder="test_analysis",
-                metrics_only_for_saving=True,
-            )
-            
-            
-            
-            
+            # eval_split was already dumped above by the evaluation pass, through an analysis
+            # loader with the same deterministic settings, so re-running it here would only
+            # duplicate those artifacts at the cost of a full pass.
+            analysis_loaders = {
+                "val": val_loader,
+                "train": train_loader,
+                "test": test_loader,
+            }
+            analysis_loaders.pop(eval_split, None)
 
             # Same train images, but with the deterministic (test-time) transform instead
             # of the training-time augmentation, so train-vs-test logit comparisons aren't
             # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
-            if config.data.dataset in CUB_FAMILY_DATASETS:
+            if config.data.dataset in CUB_CONCEPT_DATASETS:
                 _, test_transform = get_CUB_transforms()
-                train_clean_dataset = CUB_DatasetGenerator(
-                    train_loader.dataset.data, transform=test_transform, cache=False
-                )
-                train_clean_analysis_loader = make_analysis_loader(
-                    DataLoader(train_clean_dataset, batch_size=config.model.val_batch_size),
+                analysis_loaders["train_with_test_transform"] = DataLoader(
+                    CUB_DatasetGenerator(
+                        train_loader.dataset.data, transform=test_transform, cache=False
+                    ),
                     batch_size=config.model.val_batch_size,
-                    num_workers=config.workers,
                 )
 
+            for folder, base_loader in analysis_loaders.items():
                 validate_one_epoch(
-                    train_clean_analysis_loader,
+                    make_analysis_loader(
+                        base_loader,
+                        batch_size=config.model.val_batch_size,
+                        num_workers=config.workers,
+                    ),
                     model,
                     metrics,
                     t_epochs,
@@ -311,164 +338,8 @@ def run(config):
                     test=False,
                     concept_names_graph=concept_names_graph,
                     log_file=log_file_inference,
-                    save_residual_meta_data_folder="train_with_test_transform",
                     metrics_only_for_saving=True,
-                )
-
-        # ---------------------------------------------------------
-        # Save concept meta data for analysis (CBM baseline, no residual channel)
-        # ---------------------------------------------------------
-        elif config.model.model == "cbm" and config.data.save_concept_and_residual_channel:
-            train_analysis_loader = make_analysis_loader(
-                train_loader,
-                batch_size=config.model.val_batch_size,
-                num_workers=config.workers,
-            )
-            val_analysis_loader = make_analysis_loader(
-                val_loader,
-                batch_size=config.model.val_batch_size,
-                num_workers=config.workers,
-            )
-
-            validate_one_epoch(
-                val_analysis_loader,
-                model,
-                metrics,
-                t_epochs,
-                config,
-                loss_fn,
-                device,
-                test=False,
-                concept_names_graph=concept_names_graph,
-                log_file=log_file_inference,
-                save_concept_meta_data_folder="val",
-                metrics_only_for_saving=True,
-            )
-
-            validate_one_epoch(
-                train_analysis_loader,
-                model,
-                metrics,
-                t_epochs,
-                config,
-                loss_fn,
-                device,
-                test=False,
-                concept_names_graph=concept_names_graph,
-                log_file=log_file_inference,
-                save_concept_meta_data_folder="train",
-                metrics_only_for_saving=True,
-            )
-
-            # Same train images, but with the deterministic (test-time) transform instead
-            # of the training-time augmentation, so train-vs-test logit comparisons aren't
-            # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
-            if config.data.dataset in CUB_FAMILY_DATASETS:
-                _, test_transform = get_CUB_transforms()
-                train_clean_dataset = CUB_DatasetGenerator(
-                    train_loader.dataset.data, transform=test_transform, cache=False
-                )
-                train_clean_analysis_loader = make_analysis_loader(
-                    DataLoader(train_clean_dataset, batch_size=config.model.val_batch_size),
-                    batch_size=config.model.val_batch_size,
-                    num_workers=config.workers,
-                )
-
-                validate_one_epoch(
-                    train_clean_analysis_loader,
-                    model,
-                    metrics,
-                    t_epochs,
-                    config,
-                    loss_fn,
-                    device,
-                    test=False,
-                    concept_names_graph=concept_names_graph,
-                    log_file=log_file_inference,
-                    save_concept_meta_data_folder="train_with_test_transform",
-                    metrics_only_for_saving=True,
-                )
-
-        # ---------------------------------------------------------
-        # Save concept meta data for analysis (no residual channel)
-        # ---------------------------------------------------------
-        elif config.model.model == "scbm" and config.data.save_concept_and_residual_channel:
-            train_analysis_loader = make_analysis_loader(
-                train_loader,
-                batch_size=config.model.val_batch_size,
-                num_workers=config.workers,
-            )
-            val_analysis_loader = make_analysis_loader(
-                val_loader,
-                batch_size=config.model.val_batch_size,
-                num_workers=config.workers,
-            )
-
-            validate_one_epoch(
-                val_analysis_loader,
-                model,
-                metrics,
-                t_epochs,
-                config,
-                loss_fn,
-                device,
-                test=False,
-                concept_names_graph=concept_names_graph,
-                log_file=log_file_inference,
-                save_concept_meta_data_folder="val",
-                metrics_only_for_saving=True,
-            )
-
-            validate_one_epoch(
-                train_analysis_loader,
-                model,
-                metrics,
-                t_epochs,
-                config,
-                loss_fn,
-                device,
-                test=False,
-                concept_names_graph=concept_names_graph,
-                log_file=log_file_inference,
-                save_concept_meta_data_folder="train",
-                metrics_only_for_saving=True,
-            )
-            
-            
-            
-            
-            
-            
-            
-            
-
-            # Same train images, but with the deterministic (test-time) transform instead
-            # of the training-time augmentation, so train-vs-test logit comparisons aren't
-            # confounded by ColorJitter/RandomResizedCrop/RandomHorizontalFlip.
-            if config.data.dataset in CUB_FAMILY_DATASETS:
-                _, test_transform = get_CUB_transforms()
-                train_clean_dataset = CUB_DatasetGenerator(
-                    train_loader.dataset.data, transform=test_transform, cache=False
-                )
-                train_clean_analysis_loader = make_analysis_loader(
-                    DataLoader(train_clean_dataset, batch_size=config.model.val_batch_size),
-                    batch_size=config.model.val_batch_size,
-                    num_workers=config.workers,
-                )
-
-                validate_one_epoch(
-                    train_clean_analysis_loader,
-                    model,
-                    metrics,
-                    t_epochs,
-                    config,
-                    loss_fn,
-                    device,
-                    test=False,
-                    concept_names_graph=concept_names_graph,
-                    log_file=log_file_inference,
-                    save_concept_meta_data_folder="train_with_test_transform",
-                    metrics_only_for_saving=True,
+                    **{save_kwarg: folder},
                 )
 
     # ---------------------------------
@@ -485,7 +356,8 @@ def run(config):
             # CHANGE AFTERWARDS
             intervene = intervene_scbm_residual_optimized
         # Intervention curves
-        print(f"\nPERFORMING INTERVENTIONS ON THE {eval_split.upper()} SET:\n")
+        print(f"\nPERFORMING INTERVENTIONS ON THE {split_header.upper()} SET:\n")
+        # train_loader is used for the intervention strategy, for example for empirical percentile
         intervene(
             train_loader, eval_loader, model, metrics, t_epochs, config, loss_fn, device, log_file=log_file
         )
@@ -520,6 +392,28 @@ def retarget_tb_records(records, data_path, image_root):
             }
         )
     return retargeted
+
+
+def build_tb_retargeted_loader(config, loader, image_root):
+    """Deterministic loader over a split's records, read from TravelingBirds/<image_root>/.
+
+    shuffle=False / drop_last=False plus the test-time transform, so the passes over the two
+    image roots are sample-aligned: row i is the same bird with the same labels, only the
+    background differs. That pairing is the point of the override - comparing a split against
+    itself on both backgrounds isolates the background, whereas val-vs-test also swaps the
+    photographers.
+    """
+    records = retarget_tb_records(loader.dataset.data, config.data.data_path, image_root)
+    _, test_transform = get_CUB_transforms()
+    return DataLoader(
+        CUB_DatasetGenerator(records, transform=test_transform, cache=False),
+        batch_size=config.model.val_batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=config.workers,
+        pin_memory=True,
+        persistent_workers=config.workers > 0,
+    )
 
 
 def save_render_image_paths(records, folder_path):
@@ -586,23 +480,12 @@ def run_tb_render_sweep(
         if config.model.model in ("scbm_residual", "cbm_residual")
         else "save_concept_meta_data_folder"
     )
-    _, test_transform = get_CUB_transforms()
-
     for split, loader in loaders.items():
         for image_root in TB_IMAGE_ROOTS:
-            # Get right image paths for TravelingBirds
-            records = retarget_tb_records(
-                loader.dataset.data, config.data.data_path, image_root
-            )
-            render_loader = DataLoader(
-                CUB_DatasetGenerator(records, transform=test_transform, cache=False),
-                batch_size=config.model.val_batch_size,
-                shuffle=False,
-                drop_last=False,
-                num_workers=config.workers,
-                pin_memory=True,
-                persistent_workers=config.workers > 0,
-            )
+            # Same records, read from this rendering (see build_tb_retargeted_loader).
+            # The loader is shuffle=False / drop_last=False, also get test_transform
+            render_loader = build_tb_retargeted_loader(config, loader, image_root)
+            records = render_loader.dataset.data
 
             folder = f"{split}_bg_{image_root}"
             header = (
@@ -702,6 +585,29 @@ def read_run_config(config):
         return ast.literal_eval(f.readlines()[0])
 
 
+def restore_waterbirds_target(config, info_line_dict):
+    """Restore which label the Waterbirds run was trained against.
+
+    data.binary_target changes the head width (200 -> 1 logit), so a mismatch here means
+    load_state_dict fails on a shape mismatch. Recovering it from the run's own log.txt
+    keeps the flag off the inference command line, the same way pkl_file_dir and
+    num_residuals already are.
+    """
+    if config.data.dataset != "Waterbirds":
+        return
+    trained_binary = bool(info_line_dict["data"].get("binary_target", False))
+    if bool(config.data.get("binary_target", False)) != trained_binary:
+        print(
+            f"Waterbirds: restoring data.binary_target={trained_binary} from log.txt "
+            f"(config said {bool(config.data.get('binary_target', False))})."
+        )
+    config.data.binary_target = trained_binary
+    # num_classes has to follow the flag before create_model reads it. Reset it first so the
+    # resolver's binary_target=False branch does not trip on a stale 2 from the yaml.
+    config.data.num_classes = NUM_CUB_SPECIES
+    resolve_waterbirds_target(config.data)
+
+
 def update_num_concepts_and_residuals(config, info_line_dict):
     """Restore the channel dimensions the checkpoint was trained with.
 
@@ -752,7 +658,7 @@ def update_pkl_dir_and_num_concepts(config):
             config.data.save_data = True
     
     # Ensure that the pkl directory exists
-    if config.data.dataset in CUB_FAMILY_DATASETS:
+    if config.data.dataset in CUB_CONCEPT_DATASETS:
         full_path_pkl_dir = os.path.join(config.data.data_path, CUB_LABEL_ROOT, "incomplete_data", config.data.pkl_file_dir)
         if not os.path.exists(full_path_pkl_dir):
             raise ValueError(f"Pickle directory {full_path_pkl_dir} does not exist.")
@@ -800,6 +706,9 @@ def main(config: DictConfig):
         # Complete run: pkl_file_dir is the config default, but the channel
         # dimensions still have to come from the run itself
         update_num_concepts_and_residuals(config, read_run_config(config))
+
+    # Independent of `incomplete`: which label (200 or 2 classes) the run targeted also sets the head width.
+    restore_waterbirds_target(config, read_run_config(config))
 
     
     
