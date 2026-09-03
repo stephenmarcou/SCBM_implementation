@@ -13,7 +13,7 @@ from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_FAMILY_DATASETS, CUB_
 from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data, save_synthetic_data
-from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
+
 from utils.utils import numerical_stability_check
 
 
@@ -118,14 +118,14 @@ def get_data(config_base, config, gen, log_file=None):
         trainset, validset, testset = get_CIFAR10_CBM_dataloader(
             config.data_path,
         )
-    elif config.dataset == "cifar100":
-        print("CIFAR-100 DATASET")
-        trainset, validset, testset = get_CIFAR100_CBM_dataloader(
-            config.data_path,
-            gen,
-            val_ratio=config.val_ratio,
-            use_full_train_after_tuning=config.use_full_train_after_tuning
-        )
+    # elif config.dataset == "cifar100":
+    #     print("CIFAR-100 DATASET")
+    #     trainset, validset, testset = get_CIFAR100_CBM_dataloader(
+    #         config.data_path,
+    #         gen,
+    #         val_ratio=config.val_ratio,
+    #         use_full_train_after_tuning=config.use_full_train_after_tuning
+    #     )
     else:
         NotImplementedError("ERROR: Dataset not supported!")
     config = config_base
