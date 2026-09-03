@@ -148,7 +148,11 @@ def train_one_epoch(config, model, train_loader, optimizer, criterion, device):
 
 
 
-def validate_one_epoch(config, model, val_loader, criterion, device):
+def validate_one_epoch(config, model, val_loader, criterion, device, return_predictions=False):
+    """Evaluate the target head. With return_predictions, the per-sample target logits and
+    labels are also returned (in loader order, which is shuffle-free) under the keys
+    "y_pred" / "y_true" - same convention as the y_pred.pt / y_true.pt artifacts written by
+    utils/training.py, i.e. raw logits rather than argmax."""
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -156,6 +160,8 @@ def validate_one_epoch(config, model, val_loader, criterion, device):
 
     all_probs = []   # for AUROC, multilabel only
     all_labels = []
+    y_pred_list = []
+    y_true_list = []
 
     with torch.no_grad():
         for batch in val_loader:
@@ -179,6 +185,10 @@ def validate_one_epoch(config, model, val_loader, criterion, device):
             if config.data.dataset == "multilabel_synthetic":
                 all_probs.append(probs.cpu())
                 all_labels.append(class_label.cpu())
+
+            if return_predictions:
+                y_pred_list.append(outputs.detach().cpu())
+                y_true_list.append(class_label.detach().cpu())
 
     avg_loss = total_loss / len(val_loader)
     avg_accuracy = total_correct / total_samples
@@ -206,6 +216,10 @@ def validate_one_epoch(config, model, val_loader, criterion, device):
         metrics["per_task_auroc"] = per_task_auroc
         metrics["per_task_accuracy"] = per_task_accuracy
         metrics["exact_match"] = exact_match
+
+    if return_predictions:
+        metrics["y_pred"] = torch.cat(y_pred_list, dim=0)
+        metrics["y_true"] = torch.cat(y_true_list, dim=0)
 
     return metrics
 
@@ -431,7 +445,18 @@ def train(config):
     torch.save(model.state_dict(), os.path.join(experiment_path, "model.pth"))
 
     # Final evaluation on test set
-    metrics = validate_one_epoch(config, model, test_loader, criterion, device)
+    metrics = validate_one_epoch(
+        config, model, test_loader, criterion, device, return_predictions=True
+    )
+
+    # Per-sample test predictions, so the final numbers can be broken down post-hoc
+    # (e.g. per (bird, background) group on Waterbirds) instead of only as an average.
+    save_path_y_pred = os.path.join(experiment_path, "y_pred.pt")
+    save_path_y_true = os.path.join(experiment_path, "y_true.pt")
+    torch.save(metrics.pop("y_pred"), save_path_y_pred)
+    torch.save(metrics.pop("y_true"), save_path_y_true)
+    print(f"Saved y_pred to {save_path_y_pred}")
+    print(f"Saved y_true to {save_path_y_true}")
 
     if config.data.dataset == "multilabel_synthetic":
         macro_auroc = metrics.get("macro_auroc", float("nan"))

@@ -6,3 +6,5 @@ defaults:
 dataset: 'cifar10' # Name of the dataset 
 num_classes: 10 # Number of classes of the target variable
 num_concepts: 143 # Number of concepts in dataset
+num_residuals: 20 # Number of residual features (scbm_residual / cbm_residual only)
+save_concept_and_residual_channel: false # Whether to save the predicted concept and residual channels for each data point, for post-hoc analysis

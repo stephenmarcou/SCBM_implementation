@@ -12,16 +12,32 @@ Outputs:
     - Saves the concept labels as .pt files in the specified dataset directory.
 """
 
+import os
+from pathlib import Path
+
 import torchvision
 import torch
 from transformers import CLIPProcessor, CLIPModel
 
 cifar = "cifar10"  # SET THIS TO THE SPECIFIC DATASET YOU WANT TO USE
 
+# Paths are resolved relative to this file, so the script runs from any CWD.
+DATA_ROOT = Path(__file__).resolve().parent / cifar
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+# 0: macOS DataLoader workers use the 'spawn' start method, which re-imports this
+# module in the child and pickles the transform (and with it the whole CLIPProcessor)
+# through a 64KB pipe -- that deadlocks. Guard the script with __main__ before raising.
+num_workers = 0
+
 
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-with open(f"../datasets/{cifar}/{cifar}_filtered.txt", "r") as file:
+with open(DATA_ROOT / f"{cifar}_filtered.txt", "r") as file:
     # Read the contents of the file
     concept_list = [line.strip() for line in file]
 # Adding negated concepts
@@ -49,28 +65,28 @@ transform = CustomTransform(processor)
 # Load imagenet from folder
 if cifar == "cifar10":
     cifar_data = torchvision.datasets.CIFAR10(
-        root=f"../datasets/{cifar}", train=True, transform=transform, download=True
+        root=str(DATA_ROOT), train=True, transform=transform, download=True
     )
 else:
     cifar_data = torchvision.datasets.CIFAR100(
-        root=f"../datasets/{cifar}", train=True, transform=transform, download=True
+        root=str(DATA_ROOT), train=True, transform=transform, download=True
     )
 data_loader = torch.utils.data.DataLoader(
     cifar_data,
     batch_size=128,
     shuffle=False,
-    num_workers=15,
+    num_workers=num_workers,
     pin_memory=False,
 )
-model.to("cuda")
+model.to(device)
 
 ### Getting the text embeddings once s.t. they don't need to be recomputed every time.
 with torch.no_grad():
     for i, (inputs, target) in enumerate(data_loader):
-        inputs.to("cuda")
         inputs["pixel_values"] = inputs["pixel_values"].squeeze(1)
         inputs["input_ids"] = inputs["input_ids"][0]
         inputs["attention_mask"] = inputs["attention_mask"][0]
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         output = model(**inputs)
         text_embed = output.text_embeds.cpu()
         break
@@ -96,17 +112,17 @@ for split in [False, True]:
 
     if cifar == "cifar10":
         cifar_data = torchvision.datasets.CIFAR10(
-            root=f"../datasets/{cifar}", train=split, transform=transform, download=True
+            root=str(DATA_ROOT), train=split, transform=transform, download=True
         )
     else:
         cifar_data = torchvision.datasets.CIFAR100(
-            root=f"../datasets/{cifar}", train=split, transform=transform, download=True
+            root=str(DATA_ROOT), train=split, transform=transform, download=True
         )
     data_loader = torch.utils.data.DataLoader(
         cifar_data,
         batch_size=128,
         shuffle=False,
-        num_workers=15,
+        num_workers=num_workers,
         pin_memory=True,
     )
     data_storage = []
@@ -114,10 +130,10 @@ for split in [False, True]:
         for i, (inputs, target) in enumerate(data_loader):
             if i % 100 == 0:
                 print(i / len(data_loader))
-            inputs.to("cuda")
             inputs["pixel_values"] = inputs["pixel_values"].squeeze(1)
             inputs["input_ids"] = inputs["input_ids"][0]
             inputs["attention_mask"] = inputs["attention_mask"][0]
+            inputs = {k: v.to(device) for k, v in inputs.items()}
             output = model(**inputs)
             similarity = torch.nn.functional.cosine_similarity(
                 text_embed.unsqueeze(0).expand(output.image_embeds.shape[0], -1, -1),
@@ -138,4 +154,4 @@ for split in [False, True]:
         name = "train"
     else:
         name = "test"
-    torch.save(data_storage, f"../datasets/{cifar}/{cifar}_{name}_concept_labels.pt")
+    torch.save(data_storage, DATA_ROOT / f"{cifar}_{name}_concept_labels.pt")

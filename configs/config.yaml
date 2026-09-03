@@ -23,6 +23,13 @@ logging:
 inference:
   ex_name: null
   save_concept_target_pred: False # Whether to save the predicted concepts and targets for each test set instance during inference [True, False]
+  save_intervention_predictions: False # Whether to dump the per-sample predictions behind every point of
+                                       # the intervention curve, to <run>/intervention_preds<suffix>/<strategy>_<policy>/
+                                       # (step_<n>.pt plus y_true / c_true / img_ids written once). The logged curve is an
+                                       # average over the evaluation split; this is what lets it be re-read within groups
+                                       # afterwards - on Waterbirds, the four (bird, background) cells, where a background
+                                       # shortcut and a concept-driven head are indistinguishable on the average.
+                                       # ~50MB per 200-class run, negligible for a binary target. [True, False]
   eval_split: 'test' # Which split to evaluate (and intervene) on ['test', 'val', 'train']. 'val' is the in-distribution
                      # check for TravelingBirds, whose test split has different backgrounds than train/val.
                      # Non-'test' splits write to inference_log_<split>.txt / intervention_log_<split>.txt.

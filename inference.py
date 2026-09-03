@@ -150,6 +150,16 @@ def run(config):
             f.write(f"Intervention log for experiment: {experiment_path}\n")
             f.write(f"Intervention split: {split_header}\n")
 
+        # Per-sample predictions behind every point of the curve, next to the log they belong
+        # to. The logged curve is an average over the split; this is what lets it be re-read
+        # within groups afterwards (on Waterbirds, the four bird x background cells). Off by
+        # default: a 200-class sweep dumps ~50MB per run and the standard curve needs none of it.
+        intervention_preds_dir = None
+        if config.inference.get("save_intervention_predictions", False):
+            base_dir = log_dir if tb_image_root is not None else experiment_path
+            intervention_preds_dir = base_dir / f"intervention_preds{split_suffix}"
+            print(f"Saving per-intervention predictions to {intervention_preds_dir}")
+
 
 
     # Wandb
@@ -359,7 +369,8 @@ def run(config):
         print(f"\nPERFORMING INTERVENTIONS ON THE {split_header.upper()} SET:\n")
         # train_loader is used for the intervention strategy, for example for empirical percentile
         intervene(
-            train_loader, eval_loader, model, metrics, t_epochs, config, loss_fn, device, log_file=log_file
+            train_loader, eval_loader, model, metrics, t_epochs, config, loss_fn, device, log_file=log_file,
+            save_predictions_dir=intervention_preds_dir,
         )
 
     wandb.finish(quiet=True)

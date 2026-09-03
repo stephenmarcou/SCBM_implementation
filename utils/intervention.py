@@ -14,12 +14,79 @@ import wandb
 
 import numpy as np
 
+from pathlib import Path
+
 from utils.minimize_constraint import minimize_constr
 from utils.utils import numerical_stability_check
 
 
+def dump_intervention_predictions(
+    metrics,
+    save_predictions_dir,
+    strategy,
+    policy,
+    num_intervened,
+    test_loader=None,
+):
+    """Save the per-sample predictions behind one point of an intervention curve.
+
+    The curve in intervention_log.txt is an average over the whole evaluation split, which
+    hides any structure that splits it. On Waterbirds that is the point: a head reading the
+    background and a head reading the bird give the same average accuracy and completely
+    different accuracies within the four (bird, background) cells. Custom_Metrics already
+    accumulates the per-sample tensors needed to recover those, in loader order, so this is
+    only a matter of writing them out before metrics.reset() drops them.
+
+    Row i is sample i of test_loader, which is shuffle-free with drop_last=False, so the rows
+    line up with the evaluation split in dataset order - the same alignment the c_mu / res_mu
+    artifacts saved by inference.py have. img_ids.txt records the dataset's own sample ids
+    next to them, so analysis can join on the id instead of assuming that order held.
+
+    Written under <save_predictions_dir>/<strategy>_<policy>/:
+        step_<n>.pt   {y_pred_logits, c_pred_probs} after n concepts intervened, float16
+        y_true.pt, c_true.pt, img_ids.txt   once, at n = 0 (they do not change over the sweep)
+
+    Args:
+        metrics (Custom_Metrics): the metrics object for this step, *before* .reset().
+        save_predictions_dir (str | Path): run-level output folder.
+        strategy (str), policy (str): the intervention combination being swept; they key the
+            subfolder, mirroring the wandb naming, so a multi-combination run cannot
+            overwrite itself.
+        num_intervened (int): number of concepts intervened on at this point of the curve.
+        test_loader (DataLoader, optional): only used to recover the sample ids.
+    """
+    out_dir = Path(save_predictions_dir) / f"{strategy}_{policy}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # float16 keeps a 200-way sweep at ~50MB per run rather than ~200MB; the predictions are
+    # only ever used for argmax / AUROC, so the precision is irrelevant.
+    torch.save(
+        {
+            "y_pred_logits": torch.cat(metrics.y_pred_logits, dim=0).cpu().half(),
+            "c_pred_probs": torch.cat(metrics.c_pred_probs, dim=0).cpu().half(),
+        },
+        out_dir / f"step_{num_intervened:03d}.pt",
+    )
+
+    if num_intervened != 0:
+        return
+
+    torch.save(torch.cat(metrics.y_true, dim=0).cpu(), out_dir / "y_true.pt")
+    torch.save(torch.cat(metrics.c_true, dim=0).cpu(), out_dir / "c_true.pt")
+
+    # Sample ids, where the dataset carries them: the CUB family and Waterbirds keep the CUB
+    # image id on every record, the synthetic datasets have no such id. Absent ids are not an
+    # error - the tensors above are still usable in dataset order.
+    samples = getattr(getattr(test_loader, "dataset", None), "data", None)
+    if samples is None or not all(isinstance(s, dict) and "id" in s for s in samples):
+        return
+    with open(out_dir / "img_ids.txt", "w") as f:
+        f.write("\n".join(str(s["id"]) for s in samples) + "\n")
+
+
 def intervene_scbm(
-    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None
+    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None,
+    save_predictions_dir=None,
 ):
     """
     Compute the efficacy of intervening on a model using different intervention strategies and policies for SCBMs.
@@ -184,6 +251,17 @@ def intervene_scbm(
             print()
             with open(log_file, "a") as f:
                 f.write(prints + "\n")
+            # for waterbirds dump_intervention_predictions 
+            # so we can analyse minority and majority group performance
+            if save_predictions_dir is not None:
+                dump_intervention_predictions(
+                    metrics,
+                    save_predictions_dir,
+                    strategy,
+                    policy,
+                    0,
+                    test_loader,
+                )
             metrics.reset()
 
             ## Computing intervention curves using stored concept predictions
@@ -321,7 +399,17 @@ def intervene_scbm(
                 with open(log_file, "a") as f:
                     f.write(prints + "\n")
                 
-                
+                # for waterbirds dump_intervention_predictions 
+                # so we can analyse minority and majority group performance
+                if save_predictions_dir is not None:
+                    dump_intervention_predictions(
+                        metrics,
+                        save_predictions_dir,
+                        strategy,
+                        policy,
+                        num_intervened,
+                        test_loader,
+                    )
                 metrics.reset()
                 # Updating dataset
                 intervention_dataset = TensorDataset(
@@ -350,7 +438,8 @@ def intervene_scbm(
 
 
 def intervene_scbm_residual(
-    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None
+    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None,
+    save_predictions_dir=None,
 ):
     """
     Compute the efficacy of intervening on a model using different intervention strategies and policies for SCBMs.
@@ -524,6 +613,17 @@ def intervene_scbm_residual(
             print()
             with open(log_file, "a") as f:
                 f.write(prints + "\n")
+            # for waterbirds dump_intervention_predictions 
+            # so we can analyse minority and majority group performance
+            if save_predictions_dir is not None:
+                dump_intervention_predictions(
+                    metrics,
+                    save_predictions_dir,
+                    strategy,
+                    policy,
+                    0,
+                    test_loader,
+                )
             metrics.reset()
 
             ## Computing intervention curves using stored concept predictions
@@ -676,6 +776,17 @@ def intervene_scbm_residual(
                     f.write(prints + "\n")
                 
                 
+                # for waterbirds dump_intervention_predictions 
+                # so we can analyse minority and majority group performance
+                if save_predictions_dir is not None:
+                    dump_intervention_predictions(
+                        metrics,
+                        save_predictions_dir,
+                        strategy,
+                        policy,
+                        num_intervened,
+                        test_loader,
+                    )
                 metrics.reset()
                 # Updating dataset
                 intervention_dataset = TensorDataset(
@@ -705,7 +816,8 @@ def intervene_scbm_residual(
 
 # Do not store the covariance matrices for the full test set. 
 def intervene_scbm_residual_optimized(
-    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None
+    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None,
+    save_predictions_dir=None,
 ):
     """
     Memory-optimized intervention evaluation for SCBM residual models.
@@ -876,6 +988,17 @@ def intervene_scbm_residual_optimized(
                 with open(log_file, "a") as f:
                     f.write(prints + "\n")
 
+            # for waterbirds dump_intervention_predictions 
+            # so we can analyse minority and majority group performance
+            if save_predictions_dir is not None:
+                dump_intervention_predictions(
+                    metrics,
+                    save_predictions_dir,
+                    strategy,
+                    policy,
+                    0,
+                    test_loader,
+                )
             metrics.reset()
 
             # ------------------------------------------------------------
@@ -1027,6 +1150,18 @@ def intervene_scbm_residual_optimized(
                     with open(log_file, "a") as f:
                         f.write(prints + "\n")
 
+
+                # for waterbirds dump_intervention_predictions 
+                # so we can analyse minority and majority group performance
+                if save_predictions_dir is not None:
+                    dump_intervention_predictions(
+                        metrics,
+                        save_predictions_dir,
+                        strategy,
+                        policy,
+                        num_intervened,
+                        test_loader,
+                    )
                 metrics.reset()
 
                 # --------------------------------------------------------
@@ -1070,7 +1205,8 @@ def intervene_scbm_residual_optimized(
 
 
 def intervene_cbm(
-    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None
+    train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None,
+    save_predictions_dir=None,
 ):
     """
     Compute the efficacy of intervening on a model using different intervention strategies and policies for baselines.
@@ -1094,16 +1230,15 @@ def intervene_cbm(
     Returns:
         None
     """
+
+    
+    
+
+        
     model.eval()
 
     policies = ["random"]
     strategies = [config.model.inter_strategy]
-    print(f"Intervention strategy: {strategies}, policy: {policies}")
-    with open(log_file, "a") as f:
-        f.write(f"Intervention strategy: {strategies}, policy: {policies}\n")
-    
-    
-    
     
     num_interventions = min(200, config.data.num_concepts)
     if config.model.model in ("cbm", "cbm_residual") and config.model.concept_learning in (
@@ -1112,6 +1247,13 @@ def intervene_cbm(
         "embedding",
     ):
         strategies = ["hard"]
+    
+    
+    print(f"Intervention strategy: {strategies}, policy: {policies}")
+    with open(log_file, "a") as f:
+        f.write(f"Intervention strategy: {strategies}, policy: {policies}\n")
+        
+        
     # Intervening with different strategies
     first_intervention = True
     for strategy in strategies:
@@ -1207,7 +1349,17 @@ def intervene_cbm(
                 f.write(prints + "\n")
             
             
-            
+            # for waterbirds dump_intervention_predictions 
+            # so we can analyse minority and majority group performance
+            if save_predictions_dir is not None:
+                dump_intervention_predictions(
+                    metrics,
+                    save_predictions_dir,
+                    strategy,
+                    policy,
+                    0,
+                    test_loader,
+                )
             metrics.reset()
 
             # Computing intervention curves using stored concept predictions
@@ -1338,7 +1490,17 @@ def intervene_cbm(
                 
                 
                 
-                
+                # for waterbirds dump_intervention_predictions 
+                # so we can analyse minority and majority group performance
+                if save_predictions_dir is not None:
+                    dump_intervention_predictions(
+                        metrics,
+                        save_predictions_dir,
+                        strategy,
+                        policy,
+                        num_intervened,
+                        test_loader,
+                    )
                 metrics.reset()
                 # Updating mask
                 concepts_dataset_mask = torch.cat(

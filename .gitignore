@@ -196,3 +196,5 @@ delete_afterwards/*
 datasets/TravelingBirds/*
 TravelingBirds_analysis/*
 datasets/Waterbirds/*
+datasets/cifar10/*
+CUB_analysis_csv/*
