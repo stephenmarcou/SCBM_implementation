@@ -634,6 +634,17 @@ def update_num_concepts_and_residuals(config, info_line_dict):
                 f"Warning: no num_residuals in log.txt, keeping config value "
                 f"{config.data.num_residuals}"
             )
+    # The encoder architecture is part of the checkpoint's shape (e.g. CIFAR-10 runs use
+    # 'simple_CNN' against a 'resnet18' yaml default) and isn't otherwise recovered, so a
+    # mismatched default here fails create_model's load_state_dict with missing/unexpected
+    # keys and shape mismatches rather than a clear error.
+    if "encoder_arch" in info_line_dict["model"]:
+        config.model.encoder_arch = info_line_dict["model"]["encoder_arch"]
+    else:
+        print(
+            f"Warning: no encoder_arch in log.txt, keeping config value "
+            f"{config.model.encoder_arch}"
+        )
 
 
 # Need to change this function
@@ -663,9 +674,8 @@ def update_pkl_dir_and_num_concepts(config):
         print(f"info_line_dict: {info_line_dict}")
         update_num_concepts_and_residuals(config, info_line_dict)
 
-        # For synhetic dataset
+        # For synthetic dataset
         if config.data.dataset == "synthetic_res_scbm":
-            config.model.encoder_arch = info_line_dict["model"]["encoder_arch"]
             config.data.save_data = True
     
     # Ensure that the pkl directory exists
