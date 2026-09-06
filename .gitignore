@@ -199,3 +199,4 @@ datasets/Waterbirds/*
 datasets/cifar10/*
 CUB_analysis_csv/*
 datasets/AwA2/*
+datasets/MNIST_ADD_COV/*

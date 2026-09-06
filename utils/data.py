@@ -12,6 +12,7 @@ from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, get_CUB_dataloaders
 from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
 from datasets.awa2_dataset import get_AWA2_dataloaders
+from datasets.MNIST_add_cov_dataset import get_MNIST_add_cov_datasets
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data, save_synthetic_data
 
@@ -118,6 +119,11 @@ def get_data(config_base, config, gen, log_file=None):
         print("AwA2 DATASET")
         trainset, validset, testset = get_AWA2_dataloaders(
             config, config_base.incomplete
+        )
+    elif config.dataset == "MNIST-Add-Cov":
+        print("MNIST-Add-Cov DATASET")
+        trainset, validset, testset = get_MNIST_add_cov_datasets(
+            config, config_base.incomplete, seed=config_base.seed
         )
     elif config.dataset == "cifar10":
         print("CIFAR-10 DATASET")

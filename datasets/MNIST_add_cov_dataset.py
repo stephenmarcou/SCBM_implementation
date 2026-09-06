@@ -2,7 +2,7 @@
 Controlled two-digit MNIST dataset for residual/concept covariance experiments.
 
 Input:
-    Two MNIST digit images concatenated horizontally -> tensor [1, 28, 56].
+    Two MNIST digit images stacked as channels -> tensor [2, 28, 28].
 
 Observed supervised concepts:
     A1 = 1[d1 is odd]
@@ -333,8 +333,11 @@ class MNISTAddCovDataset(Dataset):
                 generator=g,
             )
 
-        # Single-backbone input: [1, 28, 56].
-        features = torch.cat([img1, img2], dim=2)
+        # Single-backbone input, the two digits as channels: [2, 28, 28].
+        # Channel stacking rather than horizontal concatenation, to match
+        # data.num_covariates=2 and IntCEMMNISTEncoder, whose first conv takes
+        # num_covariates channels and whose projection assumes a 28x28 map.
+        features = torch.cat([img1, img2], dim=0)
 
         concepts = torch.from_numpy(self.observed_concepts[index]).float()
         hidden = torch.from_numpy(self.hidden_concepts[index]).float()

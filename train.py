@@ -156,6 +156,14 @@ def create_experiment_path(config):
             ex_name = f"c_per_hid_task_{config.data.concepts_per_hid_task}_" + ex_name
         ex_name = f"K_{config.data.num_hid_tasks}_J_{config.data.num_obs_tasks}_alpha_{config.data.alpha}_beta_{config.data.beta}_rho_cr_{config.data.rho_cr}_rho_cc_{config.data.rho_cc}_rho_rr_{config.data.rho_rr}_w_ratio_{config.data.min_weight_ratio}_sigma_x_{config.data.sigma_x}_standardize_{config.data.standardize}_" + ex_name
 
+    elif config.data.dataset == "MNIST-Add-Cov":
+        # The planted hidden function is what the residual channel is supposed to pick up,
+        # and it is the one thing that changes between otherwise identical runs, so it
+        # belongs in the folder name rather than only in log.txt.
+        if config.save_name is not None:
+            ex_name = config.save_name + "_" + ex_name
+        ex_name = f"planted_{config.data.planted_function}_" + ex_name
+
     elif config.save_name is not None:
         ex_name = config.save_name + "_" + ex_name
 
@@ -671,6 +679,22 @@ def check_Waterbirds_data(config):
     resolve_waterbirds_target(config.data)
 
 
+def check_mnist_add_data(config):
+    """Point MNIST-Add-Cov at the encoder that fits its inputs.
+
+    encoder_arch lives in the model group, so configs/data/mnist_add.yaml cannot set it and
+    every +model=... default would otherwise build a resnet18 on [2, 28, 28] MNIST pairs.
+    Only the global default is overridden - an explicitly chosen architecture is left alone.
+
+    Like the other check_* functions this runs before train() writes the config to the first
+    line of log.txt, so the logged encoder_arch is the one the model was built with, which is
+    what inference.py reads it back out of.
+    """
+    if config.model.encoder_arch == "resnet18":
+        print("MNIST-Add-Cov run: setting model.encoder_arch to 'mnist_encoder'")
+        config.model.encoder_arch = "mnist_encoder"
+
+
 def check_synthetic_res_scbm_data(config):
     if config.data.data_dir_name is not None:
         train_data, _, _ = load_saved_synthetic_data(config)
@@ -732,6 +756,8 @@ def main(config: DictConfig):
     # Independent of `incomplete`: which of the two labels is the target.
     if config.data.dataset == "Waterbirds":
         check_Waterbirds_data(config)
+    if config.data.dataset == "MNIST-Add-Cov":
+        check_mnist_add_data(config)
     if config.data.dataset == "synthetic_res_scbm":
         check_synthetic_res_scbm_data(config)
     

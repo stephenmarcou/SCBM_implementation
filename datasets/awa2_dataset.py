@@ -196,6 +196,7 @@ def _load_class_to_index(root_dir):
         raise ValueError(
             f"Expected {N_CLASSES} classes in {classes_path}, found {len(class_to_index)}."
         )
+    # classes idx are 0-based, matching the CEM/ECBM AwA2 processing code.
     return class_to_index
 
 
@@ -295,6 +296,7 @@ def _generate_cem_splits(root_dir, seed=DEFAULT_SEED, train_size=0.6, val_size=0
     Generate the same random image-level 60/20/20 split used by the CEM AwA2
     processing script and save train_split.npz / val_split.npz / test_split.npz.
     """
+    # {'antelope': 0, 'grizzly+bear': 1, 'killer+whale': 2, ...}
     class_to_index = _load_class_to_index(root_dir)
 
     image_paths = []
@@ -307,6 +309,7 @@ def _generate_cem_splits(root_dir, seed=DEFAULT_SEED, train_size=0.6, val_size=0
                 img_path = os.path.abspath(os.path.join(walk_root, filename))
                 parent_dir = os.path.basename(os.path.dirname(img_path))
                 image_paths.append(img_path)
+                # append the class index corresponding to the parent directory of the image
                 image_classes.append(class_to_index[parent_dir])
 
     if not image_paths:
@@ -336,6 +339,26 @@ def _generate_cem_splits(root_dir, seed=DEFAULT_SEED, train_size=0.6, val_size=0
             labels=image_classes[split_indices],
         )
 
+    # Manifest next to the .npz files: the split itself carries no record of how it
+    # was produced, and the loader reuses whatever is on disk regardless of the seed
+    # it was called with, so without this a run's config.seed cannot be checked
+    # against the split it actually trained on.
+    with open(os.path.join(root_dir, "split_info.json"), "w") as f:
+        json.dump(
+            {
+                "seed": int(seed),
+                "train_size": train_size,
+                "val_size": val_size,
+                "test_size": 1.0 - train_size - val_size,
+                "n_images": len(image_paths),
+                "split_counts": {
+                    name: int(len(idx)) for name, idx in split_specs.items()
+                },
+            },
+            f,
+            indent=2,
+        )
+
     print(
         "Generated CEM-style AwA2 splits: "
         f"train={len(split_specs['train'])}, "
@@ -360,6 +383,7 @@ def train_val_test_split_AWA2(config_data, seed=DEFAULT_SEED):
                 "AwA2 split files not found. Generating CEM-style train/val/test "
                 f"split with seed {seed}."
             )
+            # Write all 3 split files at once, then break out of the loop.
             _generate_cem_splits(root_dir, seed=seed)
             break
 
