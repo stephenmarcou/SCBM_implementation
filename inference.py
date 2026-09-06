@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from models.models import create_model
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_LABEL_ROOT, CUB_DatasetGenerator, get_CUB_transforms
 from datasets.Waterbirds_dataset import NUM_CUB_SPECIES, resolve_waterbirds_target
+from datasets.awa2_dataset import get_incomplete_concept_set_path as get_incomplete_awa2_path
 
 def run(config):
     # Reproducibility
@@ -662,8 +663,15 @@ def update_pkl_dir_and_num_concepts(config):
 
         if config.data.dataset != "synthetic_res_scbm":
             pkl_file_dir = info_line_dict["data"]["pkl_file_dir"]
-            pkl_file_dir = pkl_file_dir.strip("/")
-            config.data.pkl_file_dir = pkl_file_dir
+            if pkl_file_dir is None:
+                # incomplete=True, but the run itself logged no concept-set folder, i.e. it was
+                # a complete run. Caught here because the AwA2 default is null, where CUB's is a
+                # (never-read) string that would instead fail further down as a missing folder.
+                raise ValueError(
+                    f"Run {config.inference.ex_name} logged no data.pkl_file_dir, so it was "
+                    f"trained on the complete concept set. Drop incomplete=True."
+                )
+            config.data.pkl_file_dir = pkl_file_dir.strip("/")
             
             
         if config.data.dataset == "synthetic_res_scbm":
@@ -678,11 +686,19 @@ def update_pkl_dir_and_num_concepts(config):
         if config.data.dataset == "synthetic_res_scbm":
             config.data.save_data = True
     
-    # Ensure that the pkl directory exists
+    # Ensure that the incomplete concept set the run was trained on still exists
     if config.data.dataset in CUB_CONCEPT_DATASETS:
         full_path_pkl_dir = os.path.join(config.data.data_path, CUB_LABEL_ROOT, "incomplete_data", config.data.pkl_file_dir)
         if not os.path.exists(full_path_pkl_dir):
             raise ValueError(f"Pickle directory {full_path_pkl_dir} does not exist.")
+    elif config.data.dataset == "AwA2":
+        # AwA2 stores its incomplete sets as a reduced predicate matrix under
+        # AwA2/<incomplete_dir>/, not as rewritten pkls under CUB_LABEL_ROOT.
+        full_path_concept_dir = get_incomplete_awa2_path(config.data)
+        if not os.path.exists(full_path_concept_dir):
+            raise ValueError(
+                f"Incomplete AwA2 concept set {full_path_concept_dir} does not exist."
+            )
 
         
         

@@ -11,6 +11,7 @@ from datasets.multilabel_synthetic_dataset import get_multilabel_datasets, load_
 from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, get_CUB_dataloaders
 from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
+from datasets.awa2_dataset import get_AWA2_dataloaders
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data, save_synthetic_data
 
@@ -113,6 +114,11 @@ def get_data(config_base, config, gen, log_file=None):
         trainset, validset, testset = get_Waterbirds_dataloaders(
             config, config_base.incomplete
         )
+    elif config.dataset == "AwA2":
+        print("AwA2 DATASET")
+        trainset, validset, testset = get_AWA2_dataloaders(
+            config, config_base.incomplete
+        )
     elif config.dataset == "cifar10":
         print("CIFAR-10 DATASET")
         trainset, validset, testset = get_CIFAR10_CBM_dataloader(
@@ -127,7 +133,9 @@ def get_data(config_base, config, gen, log_file=None):
     #         use_full_train_after_tuning=config.use_full_train_after_tuning
     #     )
     else:
-        NotImplementedError("ERROR: Dataset not supported!")
+        raise NotImplementedError(
+            f"ERROR: Dataset {config.dataset} not supported!"
+        )
     config = config_base
     train_loader = DataLoader(
         trainset,

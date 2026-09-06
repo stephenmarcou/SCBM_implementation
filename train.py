@@ -40,6 +40,10 @@ from utils.training import (
 from utils.utils import reset_random_seeds
 from datasets.Waterbirds_dataset import resolve_waterbirds_target
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_LABEL_ROOT, create_random_incomplete_dataset_attr_groups, create_random_incomplete_dataset_indiv_attr
+from datasets.awa2_dataset import (
+    get_incomplete_concept_set_path as get_incomplete_awa2_path,
+    get_num_concepts_incomplete as get_num_concepts_incomplete_awa2,
+)
 from datasets.synthetic_dataset_res_scbm import load_saved_synthetic_data
 
 from utils.data import make_analysis_loader
@@ -605,6 +609,55 @@ def check_CUB_data(config):
         config.data.num_concepts = len(train_data[0]["attribute_label"])
         
         
+def check_AwA2_data(config):
+    """AwA2 counterpart of check_CUB_data, minus the on-the-fly creation.
+
+    Resolves data.pkl_file_dir to an existing incomplete concept set and rewrites
+    data.num_concepts to what that set actually contains, so the concept head is built at
+    the right width.
+
+    Deliberately unlike check_CUB_data, a missing set is an error rather than a trigger to
+    generate one. AwA2 concept sets are created explicitly in a notebook (see
+    datasets.awa2_dataset.create_custom_incomplete_dataset and the
+    create_random_incomplete_dataset_* helpers), so which concepts are hidden is a choice
+    made once and reused across runs. Generating one here would instead make it a side
+    effect of whichever run first named a folder, and two runs pointed at the same missing
+    folder would silently train against different hidden concepts.
+
+    Note the top-level remove_attribute_groups / num_attribute_groups_remove /
+    ratio_attributes_remove flags are therefore unused for AwA2 - they are arguments to the
+    notebook helpers, not to the run.
+
+    Unlike CUB, an incomplete AwA2 set touches only the concept matrix - the image split
+    (train/val/test_split.npz) is untouched, so complete and incomplete runs see exactly
+    the same images and class labels.
+    """
+    creation_hint = (
+        "Create one in a notebook with "
+        "datasets.awa2_dataset.create_custom_incomplete_dataset (or "
+        "create_random_incomplete_dataset_attr_groups / "
+        "create_random_incomplete_dataset_indiv_attr), then pass "
+        "data.pkl_file_dir=<folder>/ to the run."
+    )
+
+    if not config.data.pkl_file_dir:
+        raise ValueError(
+            "An incomplete AwA2 run requires data.pkl_file_dir to name an existing "
+            f"concept set under <data_path>/AwA2/{config.data.incomplete_dir}, "
+            f"but it is not set. {creation_hint}"
+        )
+
+    concept_set_path = get_incomplete_awa2_path(config.data)
+    if not os.path.isdir(concept_set_path):
+        raise ValueError(
+            f"Incomplete AwA2 concept set {concept_set_path} does not exist. "
+            f"{creation_hint}"
+        )
+
+    print("Using existing incomplete AwA2 concept set: ", config.data.pkl_file_dir)
+    config.data.num_concepts = get_num_concepts_incomplete_awa2(config.data)
+
+
 def check_Waterbirds_data(config):
     """Resolve the Waterbirds target before the config is logged.
 
@@ -671,6 +724,10 @@ def main(config: DictConfig):
     if config.incomplete and config.data.dataset in CUB_CONCEPT_DATASETS:
         print(f"Incomplete {config.data.dataset} run")
         check_CUB_data(config)
+
+    if config.incomplete and config.data.dataset == "AwA2":
+        print("Incomplete AwA2 run")
+        check_AwA2_data(config)
 
     # Independent of `incomplete`: which of the two labels is the target.
     if config.data.dataset == "Waterbirds":

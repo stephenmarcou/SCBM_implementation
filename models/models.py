@@ -54,7 +54,49 @@ def create_model(config):
         
 
 
+class IntCEMMNISTEncoder(nn.Module):
+    """
+    IntCEM-style MNIST encoder.
 
+    5 convolutional layers:
+        - 16 filters
+        - 3x3 kernels
+        - BatchNorm
+        - LeakyReLU
+
+    Followed by a linear projection to 128 features.
+    """
+
+    def __init__(self, in_channels=2, output_dim=128):
+        super().__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+
+            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+
+            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+
+            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+
+            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(),
+
+            nn.Flatten(),
+            nn.Linear(16 * 28 * 28, output_dim),
+        )
+
+    def forward(self, x):
+        return self.encoder(x)
 
 
 
@@ -157,6 +199,10 @@ class SCBM(nn.Module):
                 nn.Linear(9216, n_features),
                 nn.ReLU(),
             )
+            
+        elif self.encoder_arch == "mnist_encoder":
+            n_features = 128
+            self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
@@ -496,6 +542,10 @@ class SCBM_residual(nn.Module):
                 nn.Linear(9216, n_features),
                 nn.ReLU(),
             )
+            
+        elif self.encoder_arch == "mnist_encoder":
+            n_features = 128
+            self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
@@ -1000,6 +1050,10 @@ class CBM(nn.Module):
                 nn.Linear(9216, n_features),
                 nn.ReLU(),
             )
+            
+        elif self.encoder_arch == "mnist_encoder":
+            n_features = 128
+            self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
@@ -1565,6 +1619,13 @@ class CBMResidual(nn.Module):
                 nn.Flatten(),
                 nn.Linear(9216, n_features),
                 nn.ReLU(),
+            )
+            
+        elif self.encoder_arch == "mnist_encoder":
+            n_features = 128
+            encoder = IntCEMMNISTEncoder(
+                in_channels=config.data.num_covariates,
+                output_dim=n_features,
             )
 
         else:

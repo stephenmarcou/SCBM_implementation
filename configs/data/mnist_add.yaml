@@ -1,0 +1,60 @@
+# --------------------------
+#         Dataset
+# --------------------------
+defaults:
+  - data_defaults  # Inherit data_defaults arguments
+
+dataset: 'MNIST-Add-Cov'  # Must match the dataset name used in utils/data.py
+
+# --------------------------
+#      Dataset dimensions
+# --------------------------
+num_classes: 8       # y = 4*A1 + 2*M + X, so labels are in {0, ..., 7}
+num_concepts: 3      # Observed concepts: [A1, H1, H2]
+num_residuals: 1     # Start with R=1 for the controlled mechanism experiment
+num_covariates: 2    # Two MNIST digits stacked as channels -> [2, 28, 28]
+
+# --------------------------
+#       Dataset sizes
+# --------------------------
+# Matches the IntCEM MNIST-Add convention of 12,000 train/val examples
+# with 20% held out for validation, plus 10,000 test examples.
+train_dataset_size: 12000
+val_dataset_size: 2400
+test_dataset_size: 10000
+val_percent: 0.2
+
+
+
+# --------------------------
+#   Planted hidden function
+# --------------------------
+# Supported options:
+#   xor
+#   and
+#   or
+#   a2
+planted_function: 'xor'
+
+# --------------------------
+#       Image corruption
+# --------------------------
+# Start with a clean sanity-check run.
+# For the covariance experiment, override these values, for example:
+#   corruption: 'gaussian'
+#   corruption_strength: 0.2
+corruption: 'none'
+corruption_strength: 0.0
+corruption_probability: 1.0
+
+# Test corruption can be controlled separately.
+test_corruption: 'none'
+test_corruption_strength: 0.0
+test_corruption_probability: 1.0
+
+# --------------------------
+#       Saving outputs
+# --------------------------
+save_predicted_concepts_residuals: false
+save_residual_channel: false
+save_concept_and_residual_channel: false
