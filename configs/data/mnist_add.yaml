@@ -24,6 +24,36 @@ val_dataset_size: 2400
 test_dataset_size: 10000
 val_percent: 0.2
 
+# Seed for the train/val/test split itself. Leave null to follow the run seed
+# (`seed` in configs/config.yaml); set it to pin the exact same samples across
+# runs and machines while still varying the training seed.
+data_seed: null
+
+# --------------------------
+#   Materialised splits
+# --------------------------
+# Generate the split once and write it to
+# <data_path>/MNIST_ADD_COV/splits/<name>/{train,val,test}/ :
+#   python train.py +data=mnist_add +model=SCBM_RES data.save_data=True
+# then reuse it everywhere (copy the folder to the cluster) with:
+#   data.data_dir_name=<name>
+# A loaded split is taken verbatim from disk, so it no longer depends on the run
+# seed or on numpy/torch versions.
+save_data: false
+save_data_name: null   # folder name to save under; null -> auto-named from the settings
+data_dir_name: null    # folder name to load from; null -> generate on the fly
+
+# --------------------------
+#     Incomplete variants
+# --------------------------
+# Observed concepts withheld from the bottleneck, by index (0=A1, 1=H1, 2=H2)
+# or by name ('A1', 'H1::digit1_ge_6', ...). The split is unchanged -- same
+# samples, same order, same task labels -- so a run with removed concepts stays
+# row-aligned with the complete run. Removed columns stay available for analysis
+# under the batch key 'removed_concepts', and `num_concepts` is rewritten from
+# the data.
+removed_concepts: []
+
 
 
 # --------------------------

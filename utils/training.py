@@ -466,6 +466,7 @@ def validate_one_epoch_scbm_residual(
     
     y_pred_list = []
     y_true_list = []
+    c_true_list = []
     
     cov_matrix_sum = None
     cov_matrix_count = 0
@@ -540,6 +541,7 @@ def validate_one_epoch_scbm_residual(
                 
                 y_pred_list.append(target_pred_logits.cpu())
                 y_true_list.append(target_true.cpu())
+                c_true_list.append(concepts_true.cpu())
                 
                 cov_detached = cov.detach()
 
@@ -650,6 +652,7 @@ def validate_one_epoch_scbm_residual(
         c_res_mu_tensor = torch.cat(c_res_mu_list, dim=0)
         y_pred_tensor = torch.cat(y_pred_list, dim=0)
         y_true_tensor = torch.cat(y_true_list, dim=0)
+        c_true_tensor = torch.cat(c_true_list, dim=0)
 
         parent_dir_path = os.path.dirname(log_file)
         full_path = os.path.join(parent_dir_path, save_residual_meta_data_folder)
@@ -667,6 +670,7 @@ def validate_one_epoch_scbm_residual(
         save_path_c_res_mu = os.path.join(full_path, "c_res_mu.pt")
         save_path_y_pred = os.path.join(full_path, "y_pred.pt")
         save_path_y_true = os.path.join(full_path, "y_true.pt")
+        save_path_c_true = os.path.join(full_path, "c_true.pt")
         
         cov_matrix_avg = cov_matrix_sum / cov_matrix_count  # [C+R, C+R]
         save_path_cov = os.path.join(full_path, "avg_covariance_matrix.pt")
@@ -684,6 +688,7 @@ def validate_one_epoch_scbm_residual(
         torch.save(c_res_mu_tensor, save_path_c_res_mu)
         torch.save(y_pred_tensor, save_path_y_pred)
         torch.save(y_true_tensor, save_path_y_true)
+        torch.save(c_true_tensor, save_path_c_true)
         torch.save(cov_matrix_avg, save_path_cov)
         torch.save(cov_matrices_tensor, save_path_cov_per_sample)
 
@@ -697,6 +702,7 @@ def validate_one_epoch_scbm_residual(
         print(f"Saved c_res_mu to {save_path_c_res_mu}")
         print(f"Saved y_pred to {save_path_y_pred}")
         print(f"Saved y_true to {save_path_y_true}")
+        print(f"Saved c_true to {save_path_c_true}")
         print(f"Saved average covariance matrix to {save_path_cov}")
         print(f"Saved per-sample covariance matrices {tuple(cov_matrices_tensor.shape)} to {save_path_cov_per_sample}")
 
@@ -773,6 +779,7 @@ def validate_one_epoch_scbm(
 
     y_pred_list = []
     y_true_list = []
+    c_true_list = []
 
     cov_matrix_sum = None
     cov_matrix_count = 0
@@ -845,6 +852,7 @@ def validate_one_epoch_scbm(
 
                 y_pred_list.append(target_pred_logits.cpu())
                 y_true_list.append(target_true.cpu())
+                c_true_list.append(concepts_true.cpu())
 
                 cov_detached = cov.detach()
 
@@ -909,6 +917,7 @@ def validate_one_epoch_scbm(
         c_mu_tensor = torch.cat(c_mu_list, dim=0)
         y_pred_tensor = torch.cat(y_pred_list, dim=0)
         y_true_tensor = torch.cat(y_true_list, dim=0)
+        c_true_tensor = torch.cat(c_true_list, dim=0)
 
         parent_dir_path = os.path.dirname(log_file)
         full_path = os.path.join(parent_dir_path, save_concept_meta_data_folder)
@@ -923,6 +932,7 @@ def validate_one_epoch_scbm(
         save_path_c_mu = os.path.join(full_path, "c_mu.pt")
         save_path_y_pred = os.path.join(full_path, "y_pred.pt")
         save_path_y_true = os.path.join(full_path, "y_true.pt")
+        save_path_c_true = os.path.join(full_path, "c_true.pt")
 
         cov_matrix_avg = cov_matrix_sum / cov_matrix_count  # [C, C]
         save_path_cov = os.path.join(full_path, "avg_covariance_matrix.pt")
@@ -939,6 +949,7 @@ def validate_one_epoch_scbm(
         torch.save(c_mu_tensor, save_path_c_mu)
         torch.save(y_pred_tensor, save_path_y_pred)
         torch.save(y_true_tensor, save_path_y_true)
+        torch.save(c_true_tensor, save_path_c_true)
         torch.save(cov_matrix_avg, save_path_cov)
         torch.save(cov_matrices_tensor, save_path_cov_per_sample)
 
@@ -951,6 +962,7 @@ def validate_one_epoch_scbm(
         print(f"Saved c_mu to {save_path_c_mu}")
         print(f"Saved y_pred to {save_path_y_pred}")
         print(f"Saved y_true to {save_path_y_true}")
+        print(f"Saved c_true to {save_path_c_true}")
         print(f"Saved average covariance matrix to {save_path_cov}")
         print(f"Saved per-sample covariance matrices {tuple(cov_matrices_tensor.shape)} to {save_path_cov_per_sample}")
 
@@ -1017,6 +1029,7 @@ def validate_one_epoch_cbm(
     residual_list = []
     y_pred_list = []
     y_true_list = []
+    c_true_list = []
 
     with torch.no_grad():
         for k, batch in enumerate(
@@ -1070,6 +1083,7 @@ def validate_one_epoch_cbm(
 
                 y_pred_list.append(target_pred_logits.detach().cpu())
                 y_true_list.append(target_true.cpu())
+                c_true_list.append(concepts_true.cpu())
 
             target_loss, concepts_loss, total_loss = loss_fn(
                 concepts_pred_probs, concepts_true, target_pred_logits, target_true
@@ -1111,6 +1125,7 @@ def validate_one_epoch_cbm(
         concepts_logits_tensor = torch.cat(concepts_logits_list, dim=0)
         y_pred_tensor = torch.cat(y_pred_list, dim=0)
         y_true_tensor = torch.cat(y_true_list, dim=0)
+        c_true_tensor = torch.cat(c_true_list, dim=0)
 
         parent_dir_path = os.path.dirname(log_file)
         full_path = os.path.join(parent_dir_path, save_meta_data_folder)
@@ -1120,16 +1135,19 @@ def validate_one_epoch_cbm(
         save_path_concepts_logits = os.path.join(full_path, "concepts_logits.pt")
         save_path_y_pred = os.path.join(full_path, "y_pred.pt")
         save_path_y_true = os.path.join(full_path, "y_true.pt")
+        save_path_c_true = os.path.join(full_path, "c_true.pt")
 
         torch.save(concepts_pred_probs_tensor, save_path_concepts_pred_probs)
         torch.save(concepts_logits_tensor, save_path_concepts_logits)
         torch.save(y_pred_tensor, save_path_y_pred)
         torch.save(y_true_tensor, save_path_y_true)
+        torch.save(c_true_tensor, save_path_c_true)
 
         print(f"Saved concepts predicted probabilities to {save_path_concepts_pred_probs}")
         print(f"Saved concepts logits to {save_path_concepts_logits}")
         print(f"Saved y_pred to {save_path_y_pred}")
         print(f"Saved y_true to {save_path_y_true}")
+        print(f"Saved c_true to {save_path_c_true}")
 
         if concepts_sample_mean_list:
             concepts_sample_mean_tensor = torch.cat(concepts_sample_mean_list, dim=0)

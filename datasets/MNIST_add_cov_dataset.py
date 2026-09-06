@@ -24,6 +24,8 @@ in a common DataLoader afterwards.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -58,6 +60,17 @@ def _cfg_get(config, name: str, default):
         return config.get(name, default)
     except Exception:
         return default
+
+
+def _fingerprint_arrays(*arrays) -> str:
+    """Order-sensitive content hash of a list of arrays (dtype + shape + bytes)."""
+    h = hashlib.sha256()
+    for arr in arrays:
+        a = np.ascontiguousarray(arr)
+        h.update(str(a.dtype).encode())
+        h.update(str(a.shape).encode())
+        h.update(a.tobytes())
+    return h.hexdigest()[:16]
 
 
 def _planted_x(a1: int, a2: int, function: str) -> int:
@@ -242,13 +255,15 @@ class MNISTAddCovDataset(Dataset):
     def __init__(
         self,
         mnist_dataset: MNIST,
-        class_pools: Dict[int, np.ndarray],
+        class_pools: Optional[Dict[int, np.ndarray]],
         dataset_size: int,
         seed: int,
         planted_function: str = "xor",
         corruption: str = "none",
         corruption_strength: float = 0.0,
         corruption_probability: float = 1.0,
+        manifest: Optional[Dict[str, np.ndarray]] = None,
+        removed_concepts: Optional[List[int]] = None,
     ):
         super().__init__()
 
@@ -263,6 +278,26 @@ class MNISTAddCovDataset(Dataset):
 
         if not (0.0 <= self.corruption_probability <= 1.0):
             raise ValueError("corruption_probability must be in [0,1].")
+
+        # Pixels of the corrupted first digit, when they were materialised to
+        # disk alongside the manifest. They are the one part of the sample that
+        # a seed alone does not pin across environments (torch RNG), so a saved
+        # split stores them rather than regenerating them.
+        self.corrupted_first_digit: Optional[np.ndarray] = None
+
+        # Observed concept columns dropped from the bottleneck (§ incomplete
+        # variants). The split itself is untouched -- same samples, same labels,
+        # fewer supervised concepts -- so an incomplete run stays sample-aligned
+        # with the complete one.
+        self.removed_concept_idx = sorted(int(i) for i in (removed_concepts or []))
+        self.kept_concept_idx = [
+            i for i in range(len(OBSERVED_CONCEPT_NAMES))
+            if i not in self.removed_concept_idx
+        ]
+
+        if manifest is not None:
+            self._load_from_manifest(manifest)
+            return
 
         # 1) Choose digit identities with an exactly balanced pair distribution.
         self.digit_pairs = _balanced_digit_pairs(self.dataset_size, seed=self.seed)
@@ -303,6 +338,93 @@ class MNISTAddCovDataset(Dataset):
             # 8-class target: three binary bits encoded as an integer.
             self.task_labels[i] = 4 * a1 + 2 * m + x_hidden
 
+    def _load_from_manifest(self, manifest: Dict[str, np.ndarray]) -> None:
+        """Adopt a split that was generated once and written to disk."""
+        self.digit_pairs = manifest["digit_pairs"].astype(np.int64)
+        self.idx1 = manifest["idx1"].astype(np.int64)
+        self.idx2 = manifest["idx2"].astype(np.int64)
+        self.corruption_mask = manifest["corruption_mask"].astype(bool)
+        self.observed_concepts = manifest["observed_concepts"].astype(np.float32)
+        self.hidden_concepts = manifest["hidden_concepts"].astype(np.float32)
+        self.task_labels = manifest["task_labels"].astype(np.int64)
+
+        if "corrupted_first_digit" in manifest:
+            self.corrupted_first_digit = manifest["corrupted_first_digit"].astype(
+                np.float32
+            )
+
+        self.dataset_size = len(self.digit_pairs)
+
+        for name, arr in (
+            ("idx1", self.idx1),
+            ("idx2", self.idx2),
+            ("corruption_mask", self.corruption_mask),
+            ("observed_concepts", self.observed_concepts),
+            ("hidden_concepts", self.hidden_concepts),
+            ("task_labels", self.task_labels),
+        ):
+            if len(arr) != self.dataset_size:
+                raise ValueError(
+                    f"Corrupt split manifest: {name} has {len(arr)} rows, "
+                    f"expected {self.dataset_size}."
+                )
+
+    def concept_names(self) -> List[str]:
+        """Names of the concepts actually exposed in the bottleneck."""
+        return [OBSERVED_CONCEPT_NAMES[i] for i in self.kept_concept_idx]
+
+    def removed_concept_names(self) -> List[str]:
+        """Names of the observed concepts withheld from the bottleneck."""
+        return [OBSERVED_CONCEPT_NAMES[i] for i in self.removed_concept_idx]
+
+    def fingerprint(self) -> str:
+        """
+        Content hash of this split.
+
+        Covers everything that determines the data: the generator settings, the
+        digit identities, *which* MNIST images back them, the derived concept and
+        task labels, the corruption mask, and the actual pixels of a fixed probe
+        subset (so a differing torch RNG for the corruption noise is caught too).
+
+        Deliberately independent of which concepts are exposed in the
+        bottleneck, so a complete run and an incomplete run over the same split
+        print the same fingerprint.
+
+        Two runs printing the same fingerprint hold literally the same samples in
+        the same order, whatever machine they ran on.
+        """
+        spec = "|".join(
+            str(v)
+            for v in (
+                self.dataset_size,
+                self.seed,
+                self.planted_function,
+                self.corruption,
+                self.corruption_strength,
+                self.corruption_probability,
+            )
+        )
+
+        n_probe = min(self.dataset_size, 16)
+        probe_idx = np.unique(
+            np.linspace(0, self.dataset_size - 1, n_probe).astype(np.int64)
+        )
+        probe_pixels = torch.stack(
+            [self[int(i)]["features"] for i in probe_idx]
+        ).numpy()
+
+        return _fingerprint_arrays(
+            np.frombuffer(spec.encode(), dtype=np.uint8),
+            self.digit_pairs,
+            self.idx1,
+            self.idx2,
+            self.corruption_mask,
+            self.observed_concepts,
+            self.hidden_concepts,
+            self.task_labels,
+            probe_pixels,
+        )
+
     def __len__(self) -> int:
         return self.dataset_size
 
@@ -323,15 +445,20 @@ class MNISTAddCovDataset(Dataset):
         )
 
         if is_corrupted:
-            # Deterministic corruption for each sample.
-            g = torch.Generator()
-            g.manual_seed(self.seed * 1_000_003 + int(index))
-            img1 = _apply_corruption(
-                img1,
-                corruption=self.corruption,
-                strength=self.corruption_strength,
-                generator=g,
-            )
+            if self.corrupted_first_digit is not None:
+                # Materialised split: read the pixels back rather than
+                # re-drawing them from a torch RNG.
+                img1 = torch.from_numpy(self.corrupted_first_digit[index]).float()
+            else:
+                # Deterministic corruption for each sample.
+                g = torch.Generator()
+                g.manual_seed(self.seed * 1_000_003 + int(index))
+                img1 = _apply_corruption(
+                    img1,
+                    corruption=self.corruption,
+                    strength=self.corruption_strength,
+                    generator=g,
+                )
 
         # Single-backbone input, the two digits as channels: [2, 28, 28].
         # Channel stacking rather than horizontal concatenation, to match
@@ -339,7 +466,9 @@ class MNISTAddCovDataset(Dataset):
         # num_covariates channels and whose projection assumes a 28x28 map.
         features = torch.cat([img1, img2], dim=0)
 
-        concepts = torch.from_numpy(self.observed_concepts[index]).float()
+        all_observed = torch.from_numpy(self.observed_concepts[index]).float()
+        concepts = all_observed[self.kept_concept_idx]
+        removed = all_observed[self.removed_concept_idx]
         hidden = torch.from_numpy(self.hidden_concepts[index]).float()
         label = torch.tensor(self.task_labels[index], dtype=torch.long)
 
@@ -351,6 +480,7 @@ class MNISTAddCovDataset(Dataset):
 
             # Oracle-only analysis metadata; NOT part of `concepts`.
             "hidden_concepts": hidden,      # [A2, X]
+            "removed_concepts": removed,    # observed concepts held out, if any
             "A2": hidden[0],
             "X": hidden[1],
             "digit_labels": torch.tensor([int(d1), int(d2)], dtype=torch.long),
@@ -362,6 +492,7 @@ def get_MNIST_add_cov_datasets(
     config,
     incomplete: Optional[bool] = None,
     seed: int = 42,
+    log_file: Optional[str] = None,
 ):
     """
     Return train/validation/test Dataset objects.
@@ -379,6 +510,10 @@ def get_MNIST_add_cov_datasets(
 
     planted_function:                'xor' (default), 'and', 'or', 'a2'
 
+    data_seed:                       default None -> use the run seed. Set it to
+                                     pin the split independently of `config.seed`,
+                                     so several training seeds share one dataset.
+
     corruption:                      'none', 'gaussian', 'blur', 'occlusion'
     corruption_strength:             default 0.0
     corruption_probability:          default 1.0
@@ -391,6 +526,13 @@ def get_MNIST_add_cov_datasets(
     This dataset is incomplete by construction because A2 and X are withheld
     from the `concepts` tensor.
     """
+    # Optional: decouple the data split from the run seed. With data_seed set,
+    # every run reuses the exact same train/val/test samples regardless of
+    # config.seed; left at None the split follows the run seed as before.
+    data_seed = _cfg_get(config, "data_seed", None)
+    if data_seed is not None:
+        seed = int(data_seed)
+
     data_path = _cfg_get(config, "data_path", "./data")
     root = os.path.join(data_path, "MNIST_ADD_COV")
     os.makedirs(root, exist_ok=True)
@@ -403,6 +545,9 @@ def get_MNIST_add_cov_datasets(
     test_dataset_size = int(_cfg_get(config, "test_dataset_size", 10000))
 
     planted_function = str(_cfg_get(config, "planted_function", "xor"))
+    removed_concepts = resolve_removed_concepts(
+        _cfg_get(config, "removed_concepts", None)
+    )
 
     corruption = str(_cfg_get(config, "corruption", "none"))
     corruption_strength = float(_cfg_get(config, "corruption_strength", 0.0))
@@ -433,6 +578,7 @@ def get_MNIST_add_cov_datasets(
         dataset_size=train_dataset_size,
         seed=seed + 10,
         planted_function=planted_function,
+        removed_concepts=removed_concepts,
         corruption=corruption,
         corruption_strength=corruption_strength,
         corruption_probability=corruption_probability,
@@ -444,6 +590,7 @@ def get_MNIST_add_cov_datasets(
         dataset_size=val_dataset_size,
         seed=seed + 20,
         planted_function=planted_function,
+        removed_concepts=removed_concepts,
         corruption=corruption,
         corruption_strength=corruption_strength,
         corruption_probability=corruption_probability,
@@ -455,12 +602,330 @@ def get_MNIST_add_cov_datasets(
         dataset_size=test_dataset_size,
         seed=seed + 30,
         planted_function=planted_function,
+        removed_concepts=removed_concepts,
         corruption=test_corruption,
         corruption_strength=test_corruption_strength,
         corruption_probability=test_corruption_probability,
     )
 
+    sync_num_concepts(config, trainset, log_file=log_file)
+
+    log_split_fingerprints(
+        {"train": trainset, "val": valset, "test": testset},
+        seed=seed,
+        planted_function=planted_function,
+        log_file=log_file,
+    )
+
     return trainset, valset, testset
+
+
+SPLIT_ROOT = "splits"
+MANIFEST_KEYS = (
+    "digit_pairs",
+    "idx1",
+    "idx2",
+    "corruption_mask",
+    "observed_concepts",
+    "hidden_concepts",
+    "task_labels",
+)
+
+# Which underlying MNIST partition each split draws its images from.
+SPLIT_MNIST_SOURCE = {"train": "train", "val": "train", "test": "test"}
+
+
+def resolve_removed_concepts(removed) -> List[int]:
+    """
+    Turn a config entry into observed-concept column indices.
+
+    Accepts indices (0..2), full names ("A1::digit1_is_odd") or short names
+    ("A1"), so the config can read either way.
+    """
+    if removed is None:
+        return []
+    if isinstance(removed, (int, str)):
+        removed = [removed]
+
+    short_names = [name.split("::")[0] for name in OBSERVED_CONCEPT_NAMES]
+
+    indices = []
+    for entry in removed:
+        if isinstance(entry, bool):
+            raise ValueError(f"Invalid removed_concepts entry: {entry!r}")
+        if isinstance(entry, int):
+            index = entry
+        elif entry in OBSERVED_CONCEPT_NAMES:
+            index = OBSERVED_CONCEPT_NAMES.index(entry)
+        elif entry in short_names:
+            index = short_names.index(entry)
+        else:
+            raise ValueError(
+                f"Unknown concept {entry!r}. Use an index in "
+                f"[0, {len(OBSERVED_CONCEPT_NAMES) - 1}] or one of "
+                f"{OBSERVED_CONCEPT_NAMES} / {short_names}."
+            )
+        if not 0 <= index < len(OBSERVED_CONCEPT_NAMES):
+            raise ValueError(
+                f"removed_concepts index {index} out of range for "
+                f"{len(OBSERVED_CONCEPT_NAMES)} observed concepts."
+            )
+        indices.append(index)
+
+    if len(set(indices)) == len(OBSERVED_CONCEPT_NAMES):
+        raise ValueError("Cannot remove every observed concept.")
+
+    return sorted(set(indices))
+
+
+def sync_num_concepts(config, dataset: "MNISTAddCovDataset", log_file=None) -> None:
+    """
+    Keep `data.num_concepts` in step with the concepts actually exposed.
+
+    Mirrors the CUB path, where removing attributes rewrites num_concepts from
+    the data rather than trusting the config value.
+    """
+    num_concepts = len(dataset.kept_concept_idx)
+    configured = _cfg_get(config, "num_concepts", num_concepts)
+
+    if configured != num_concepts:
+        message = (
+            f"MNIST-Add-Cov: removing {dataset.removed_concept_names()} -> "
+            f"num_concepts {configured} -> {num_concepts}"
+        )
+        print(message)
+        if log_file is not None:
+            with open(log_file, "a") as f:
+                f.write(message + "\n")
+
+    try:
+        config.num_concepts = num_concepts
+    except Exception:  # plain config objects used by the smoke test
+        pass
+
+
+def _split_dir(config, data_dir_name: str, split: str) -> str:
+    data_path = _cfg_get(config, "data_path", "./data")
+    return os.path.join(
+        data_path, "MNIST_ADD_COV", SPLIT_ROOT, data_dir_name, split
+    )
+
+
+def save_MNIST_add_cov_data(config, train, val, test, log_file=None) -> str:
+    """
+    Materialise the generated splits to disk, one folder per split.
+
+    Writes the *manifest* of each split -- which MNIST images it uses, in what
+    order, with which digit identities, concept and task labels -- rather than
+    the images themselves, since the underlying MNIST files are already
+    identical everywhere. The one exception is corrupted pixels, which depend on
+    the torch RNG and are therefore stored outright.
+
+    Generate once, copy the folder to the cluster (or point both at a shared
+    path) and every run loads byte-identical train/val/test regardless of
+    numpy/torch versions or the run seed.
+    """
+    data_path = _cfg_get(config, "data_path", "./data")
+    root = os.path.join(data_path, "MNIST_ADD_COV", SPLIT_ROOT)
+    os.makedirs(root, exist_ok=True)
+
+    save_name = _cfg_get(config, "save_data_name", None) or (
+        f"seed_{train.seed - 10}"
+        f"_n_{len(train)}_{len(val)}_{len(test)}"
+        f"_{train.planted_function}"
+        f"_{train.corruption}_{train.corruption_strength}"
+    )
+
+    version = 1
+    unique_name = save_name
+    while os.path.exists(os.path.join(root, unique_name)):
+        unique_name = f"{save_name}_v{version}"
+        version += 1
+    save_dir = os.path.join(root, unique_name)
+
+    splits = {"train": train, "val": val, "test": test}
+    for split, dataset in splits.items():
+        split_dir = os.path.join(save_dir, split)
+        os.makedirs(split_dir, exist_ok=True)
+
+        arrays = {key: getattr(dataset, key) for key in MANIFEST_KEYS}
+
+        if dataset.corruption not in {"none", "", "clean"} and (
+            dataset.corruption_strength > 0
+        ):
+            # Corrupted pixels are the only part not derivable from the MNIST
+            # files plus the manifest, so store them explicitly.
+            arrays["corrupted_first_digit"] = np.stack(
+                [
+                    dataset[i]["features"][0:1].numpy()
+                    for i in range(len(dataset))
+                ]
+            ).astype(np.float32)
+
+        np.savez_compressed(os.path.join(split_dir, "manifest.npz"), **arrays)
+
+        meta = {
+            "split": split,
+            "mnist_source": SPLIT_MNIST_SOURCE[split],
+            "dataset_size": len(dataset),
+            "seed": dataset.seed,
+            "planted_function": dataset.planted_function,
+            "corruption": dataset.corruption,
+            "corruption_strength": dataset.corruption_strength,
+            "corruption_probability": dataset.corruption_probability,
+            "fingerprint": dataset.fingerprint(),
+        }
+        with open(os.path.join(split_dir, "meta.json"), "w") as f:
+            json.dump(meta, f, indent=2)
+
+    with open(os.path.join(save_dir, "info.txt"), "w") as f:
+        f.write("MNIST-Add-Cov materialised split\n")
+        f.write(f"generator seed: {train.seed - 10}\n")
+        f.write(f"planted_function: {train.planted_function}\n")
+        f.write(
+            f"corruption: {train.corruption} "
+            f"(strength={train.corruption_strength}, "
+            f"p={train.corruption_probability})\n"
+        )
+        f.write(
+            f"test corruption: {test.corruption} "
+            f"(strength={test.corruption_strength}, "
+            f"p={test.corruption_probability})\n"
+        )
+        f.write(f"sizes: train={len(train)}, val={len(val)}, test={len(test)}\n")
+        f.write(f"observed concepts (full): {OBSERVED_CONCEPT_NAMES}\n")
+        f.write(f"oracle variables: {ORACLE_NAMES}\n")
+        f.write(
+            "concept removal is applied at load time from data.removed_concepts, "
+            "so incomplete runs reuse this exact split\n"
+        )
+        for split, dataset in splits.items():
+            f.write(f"{split} fingerprint: {dataset.fingerprint()}\n")
+
+    message = f"Saved MNIST-Add-Cov splits to {save_dir}"
+    print(message)
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(message + "\n")
+            f.write(f"data_dir: {save_dir}\n")
+
+    return save_dir
+
+
+def load_saved_MNIST_add_cov_data(config, log_file=None):
+    """
+    Load the train/val/test folders written by `save_MNIST_add_cov_data`.
+
+    The split is taken verbatim from disk -- no RNG is touched, so the run seed
+    no longer influences which samples land where. `data.removed_concepts` is
+    applied on top, which is what makes an incomplete run the *same* split with
+    fewer supervised concepts.
+    """
+    data_dir_name = _cfg_get(config, "data_dir_name", None)
+    if data_dir_name is None:
+        raise ValueError(
+            "load_saved_MNIST_add_cov_data requires data.data_dir_name."
+        )
+
+    data_path = _cfg_get(config, "data_path", "./data")
+    mnist_root = os.path.join(data_path, "MNIST_ADD_COV")
+    removed_concepts = resolve_removed_concepts(
+        _cfg_get(config, "removed_concepts", None)
+    )
+
+    mnist_by_source = {
+        "train": MNIST(root=mnist_root, train=True, download=True),
+        "test": MNIST(root=mnist_root, train=False, download=True),
+    }
+
+    datasets = []
+    for split in ("train", "val", "test"):
+        split_dir = _split_dir(config, data_dir_name, split)
+        if not os.path.isdir(split_dir):
+            raise FileNotFoundError(
+                f"Missing split folder {split_dir}. Generate it once with "
+                f"data.save_data=True, then point data.data_dir_name at it."
+            )
+
+        with open(os.path.join(split_dir, "meta.json")) as f:
+            meta = json.load(f)
+        with np.load(os.path.join(split_dir, "manifest.npz")) as npz:
+            manifest = {key: npz[key] for key in npz.files}
+
+        dataset = MNISTAddCovDataset(
+            mnist_dataset=mnist_by_source[meta["mnist_source"]],
+            class_pools=None,
+            dataset_size=meta["dataset_size"],
+            seed=meta["seed"],
+            planted_function=meta["planted_function"],
+            corruption=meta["corruption"],
+            corruption_strength=meta["corruption_strength"],
+            corruption_probability=meta["corruption_probability"],
+            manifest=manifest,
+            removed_concepts=removed_concepts,
+        )
+        datasets.append(dataset)
+
+    trainset, valset, testset = datasets
+    sync_num_concepts(config, trainset, log_file=log_file)
+
+    message = f"Loaded MNIST-Add-Cov splits from {data_dir_name}"
+    if removed_concepts:
+        message += f" (removed concepts: {trainset.removed_concept_names()})"
+    print(message)
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(message + "\n")
+
+    log_split_fingerprints(
+        {"train": trainset, "val": valset, "test": testset},
+        seed=trainset.seed - 10,
+        planted_function=trainset.planted_function,
+        log_file=log_file,
+    )
+
+    return trainset, valset, testset
+
+
+def log_split_fingerprints(
+    splits: Dict[str, "MNISTAddCovDataset"],
+    seed: int,
+    planted_function: str,
+    log_file: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    Print (and optionally log) a content hash per split.
+
+    This is the explicit check that two runs — local and cluster — are training
+    on the same data: compare the printed fingerprints, they match if and only
+    if the samples match.
+    """
+    fingerprints = {name: ds.fingerprint() for name, ds in splits.items()}
+
+    lines = [
+        f"MNIST-Add-Cov split fingerprints "
+        f"(data seed={seed}, planted_function={planted_function}):"
+    ]
+    lines += [
+        f"  {name:<5} n={len(splits[name]):<6} sha256[:16]={fp}"
+        for name, fp in fingerprints.items()
+    ]
+    reference = next(iter(splits.values()))
+    lines.append(f"  concepts exposed: {reference.concept_names()}")
+    if reference.removed_concept_idx:
+        lines.append(f"  concepts removed: {reference.removed_concept_names()}")
+    lines.append(
+        "  Matching fingerprints => identical train/val/test samples across "
+        "machines (independent of which concepts are exposed)."
+    )
+
+    message = "\n".join(lines)
+    print(message)
+    if log_file is not None:
+        with open(log_file, "a") as f:
+            f.write(message + "\n")
+
+    return fingerprints
 
 
 def get_mnist_add_cov_concept_names() -> List[str]:
