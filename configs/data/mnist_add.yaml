@@ -46,23 +46,39 @@ dataset: 'MNIST-Add-Cov'  # Must match the dataset name used in utils/data.py
 #   Residual has no job -> every cross-block entry should go flat. This is what
 #   tells you how big a "big" entry is.
 #
-# The loader rewrites num_concepts, num_classes and num_covariates to match the
-# selected experiment, so the values below are documentation, not a contract.
+# The loader rewrites num_concepts and num_classes to match the selected
+# experiment, so those values below are documentation, not a contract.
+# num_covariates goes the other way: it is the setting, and the data follows it.
 experiment: 'hidden_carry'
 
 # --------------------------
 #      Dataset dimensions
 # --------------------------
-#   original            -> num_classes=8, num_concepts=3, num_covariates=2
-#   hidden_xor          -> num_classes=2, num_concepts=2, num_covariates=2
-#   hidden_carry        -> num_classes=8, num_concepts=4, num_covariates=4
-#   hidden_diff         -> num_classes=8, num_concepts=4, num_covariates=4
-#   hidden_carry_swap   -> num_classes=8, num_concepts=4, num_covariates=4
-#   hidden_carry_null   -> num_classes=4, num_concepts=4, num_covariates=4
+#   original            -> num_classes=8, num_concepts=3, min num_covariates=2
+#   hidden_xor          -> num_classes=2, num_concepts=2, min num_covariates=2
+#   hidden_carry        -> num_classes=8, num_concepts=4, min num_covariates=4
+#   hidden_diff         -> num_classes=8, num_concepts=4, min num_covariates=4
+#   hidden_carry_swap   -> num_classes=8, num_concepts=4, min num_covariates=4
+#   hidden_carry_null   -> num_classes=4, num_concepts=4, min num_covariates=4
 num_classes: 8
 num_concepts: 4
 num_residuals: 1     # Start with R=1; go to R=5 only after R=1 works
-num_covariates: 4    # Four MNIST digits stacked as channels -> [4, 28, 28]
+
+# Digit images stacked as channels: the input is [num_covariates, 28, 28] and
+# the encoder's first conv is built with in_channels=num_covariates.
+#
+# The images follow this number, not the other way round. The experiment's own
+# digit count is a MINIMUM -- those leading channels back the concepts, the
+# hidden X and the label, so a smaller value is rejected. Anything above it is
+# appended as independently drawn distractor digits that no concept, oracle or
+# label reads: use it to vary input dimensionality (and the concepts-to-pixels
+# ratio the encoder faces) while holding the causal structure fixed. The digits
+# the experiment does read are drawn the same way whatever the total, so raising
+# this does not redefine A, B, D1, D2 or X.
+#
+# Note the interaction with corruption_channels below: 'all' now also corrupts
+# the distractor channels.
+num_covariates: 4
 
 # --------------------------
 #       Dataset sizes

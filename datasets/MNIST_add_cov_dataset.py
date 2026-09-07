@@ -89,6 +89,18 @@ Supported experiments
 In every hidden_* experiment X is NEVER part of the supervised `concepts`
 tensor; it is oracle metadata only.
 
+Input channels
+--------------
+The number of digit images stacked as channels is `data.num_covariates`, so the
+input is always [num_covariates, 28, 28] and matches the encoder's first conv.
+Each experiment declares how many digits it *needs* (2 for original/hidden_xor,
+4 for the carry family) to build its concepts, its hidden X and its label; those
+are always the leading channels. Leaving num_covariates unset falls back to that
+requirement. Setting it higher appends independently drawn digit channels that
+nothing in the experiment reads -- distractor input for varying the input
+dimensionality while holding the causal structure fixed. Setting it lower is an
+error.
+
 The function get_MNIST_add_cov_datasets(...) returns Dataset objects rather
 than DataLoaders, matching the way the project's utils/data.py wraps datasets
 in a common DataLoader afterwards.
@@ -290,7 +302,42 @@ def experiment_concept_names(experiment: str) -> List[str]:
 
 
 def experiment_num_digits(experiment: str) -> int:
+    """Digit channels the experiment *needs* to build its concepts, X and label."""
     return int(get_experiment_spec(experiment)["num_digits"])
+
+
+def _check_num_digits(num_digits: int, experiment: str) -> int:
+    """Reject a channel count that cannot back the experiment's variables."""
+    required = experiment_num_digits(experiment)
+    num_digits = int(num_digits)
+    if num_digits < required:
+        raise ValueError(
+            f"num_covariates={num_digits} gives fewer digit channels than "
+            f"experiment={experiment!r} needs: its concepts, its hidden X and "
+            f"its task label are all built from the first {required} digits. "
+            f"Set data.num_covariates >= {required}."
+        )
+    return num_digits
+
+
+def resolve_num_digits(config, experiment: str) -> int:
+    """
+    How many digit channels the input stacks -- read off `data.num_covariates`.
+
+    The experiment fixes how many digits it *needs* (2 for original/hidden_xor,
+    4 for the carry family); num_covariates fixes how many the image actually
+    has. Setting it above the requirement appends extra digit channels that no
+    concept, no oracle and no label reads -- pure distractor input, drawn
+    independently of the digits that matter -- which is how you vary input
+    dimensionality without changing the experiment's causal structure.
+
+    Left unset it falls back to the experiment's requirement, which is what
+    every run did before the channel count became configurable.
+    """
+    num_covariates = _cfg_get(config, "num_covariates", None)
+    if num_covariates is None:
+        return experiment_num_digits(experiment)
+    return _check_num_digits(num_covariates, experiment)
 
 
 def _cfg_get(config, name: str, default):
@@ -436,23 +483,30 @@ def _balanced_digit_tuples(n_samples: int, num_digits: int, seed: int) -> np.nda
     'original' and 'hidden_xor' are bit-identical to before this file grew the
     four-digit experiments.
 
-    num_digits == 4 stacks two independently drawn balanced pairs: (d1, d2) is
-    exactly uniform over the 100 ordered pairs, (d3, d4) likewise, and the two
-    halves are independent of each other. That independence is what makes the
+    Beyond that the digits are drawn in independent balanced pairs: (d1, d2) is
+    exactly uniform over the 100 ordered pairs, (d3, d4) likewise, and the
+    blocks are independent of each other. That independence is what makes the
     distractor concepts D1/D2 exactly uncorrelated with a hidden X built from
-    d1 and d2 (and vice versa for hidden_carry_swap).
+    d1 and d2 (and vice versa for hidden_carry_swap), and it extends to the
+    padding channels a larger `data.num_covariates` asks for: block k is seeded
+    from `seed` the same way whatever the total channel count, so raising
+    num_covariates appends channels without disturbing the digits the
+    experiment is defined on.
+
+    An odd count drops the trailing column of the last block; its first column
+    is still an exactly balanced marginal.
     """
     if num_digits == 2:
         return _balanced_digit_pairs(n_samples, seed=seed)
 
-    if num_digits % 2 != 0:
-        raise ValueError(f"num_digits must be even, got {num_digits}.")
+    if num_digits < 1:
+        raise ValueError(f"num_digits must be at least 1, got {num_digits}.")
 
-    halves = [
+    blocks = [
         _balanced_digit_pairs(n_samples, seed=seed + block * 5_000_011)
-        for block in range(num_digits // 2)
+        for block in range((num_digits + 1) // 2)
     ]
-    return np.concatenate(halves, axis=1)
+    return np.concatenate(blocks, axis=1)[:, :num_digits]
 
 
 def _sample_source_indices(
@@ -612,6 +666,7 @@ class MNISTAddCovDataset(Dataset):
         manifest: Optional[Dict[str, np.ndarray]] = None,
         removed_concepts: Optional[List[int]] = None,
         corruption_channels=None,
+        num_covariates: Optional[int] = None,
     ):
         super().__init__()
 
@@ -623,7 +678,17 @@ class MNISTAddCovDataset(Dataset):
 
         # Everything experiment-specific comes from the registry.
         self.spec = EXPERIMENT_SPECS[self.experiment]
-        self.num_digits = int(self.spec["num_digits"])
+
+        # `required_digits` is what the experiment reads; `num_digits` is how
+        # many channels the image stacks, and follows data.num_covariates. Any
+        # channel beyond the requirement is a distractor: independent of the
+        # concepts, of X and of the label.
+        self.required_digits = int(self.spec["num_digits"])
+        self.num_digits = (
+            self.required_digits
+            if num_covariates is None
+            else _check_num_digits(num_covariates, self.experiment)
+        )
         self.observed_concept_names = list(self.spec["concept_names"])
         self.oracle_concept_names = list(self.spec["oracle_names"])
         self.num_classes = int(self.spec["num_classes"])
@@ -736,7 +801,10 @@ class MNISTAddCovDataset(Dataset):
         if self.digit_pairs.shape[1] != self.num_digits:
             raise ValueError(
                 f"Split manifest holds {self.digit_pairs.shape[1]} digit columns "
-                f"but experiment={self.experiment!r} needs {self.num_digits}."
+                f"but this run asks for {self.num_digits} channels "
+                f"(experiment={self.experiment!r}, "
+                f"data.num_covariates={self.num_digits}). Set num_covariates to "
+                f"{self.digit_pairs.shape[1]}, or regenerate the split."
             )
         if self.observed_concepts.shape[1] != len(self.observed_concept_names):
             raise ValueError(
@@ -876,11 +944,11 @@ class MNISTAddCovDataset(Dataset):
                         generator=g,
                     )
 
-        # Single-backbone input, the digits as channels: [num_digits, 28, 28].
-        # Channel stacking rather than horizontal concatenation, to match
-        # data.num_covariates and IntCEMMNISTEncoder, whose first conv takes
-        # num_covariates channels and whose projection assumes a 28x28 map.
-        # NOTE: set data.num_covariates = 4 for the four-digit experiments.
+        # Single-backbone input, the digits as channels: [num_digits, 28, 28],
+        # and num_digits is data.num_covariates. Channel stacking rather than
+        # horizontal concatenation, to match IntCEMMNISTEncoder, whose first
+        # conv takes num_covariates channels and whose projection assumes a
+        # 28x28 map.
         features = torch.cat(images, dim=0)
 
         all_observed = torch.from_numpy(self.observed_concepts[index]).float()
@@ -931,6 +999,14 @@ def get_MNIST_add_cov_datasets(
                                      hidden_xor automatically exposes only
                                      H1/H2 and uses X=H1 XOR H2, y=X.
 
+    num_covariates:                  digit images stacked as channels, i.e. the
+                                     input is [num_covariates, 28, 28]. Defaults
+                                     to the experiment's own digit count (2 or
+                                     4); a larger value appends distractor
+                                     channels that no concept, oracle or label
+                                     depends on. Smaller than the experiment
+                                     needs is an error.
+
     planted_function:                'xor' (default), 'and', 'or', 'a2'
                                      Used by the original experiment only.
 
@@ -970,6 +1046,9 @@ def get_MNIST_add_cov_datasets(
 
     experiment = _normalize_experiment(_cfg_get(config, "experiment", "original"))
     planted_function = str(_cfg_get(config, "planted_function", "xor"))
+
+    # How many digit images get stacked as channels. Follows data.num_covariates.
+    num_covariates = resolve_num_digits(config, experiment)
 
     removed_concepts = _apply_experiment_concept_rules(
         resolve_removed_concepts(
@@ -1014,6 +1093,7 @@ def get_MNIST_add_cov_datasets(
         corruption_strength=corruption_strength,
         corruption_probability=corruption_probability,
         corruption_channels=corruption_channels,
+        num_covariates=num_covariates,
     )
 
     valset = MNISTAddCovDataset(
@@ -1028,6 +1108,7 @@ def get_MNIST_add_cov_datasets(
         corruption_strength=corruption_strength,
         corruption_probability=corruption_probability,
         corruption_channels=corruption_channels,
+        num_covariates=num_covariates,
     )
 
     testset = MNISTAddCovDataset(
@@ -1042,6 +1123,7 @@ def get_MNIST_add_cov_datasets(
         corruption_strength=test_corruption_strength,
         corruption_probability=test_corruption_probability,
         corruption_channels=corruption_channels,
+        num_covariates=num_covariates,
     )
 
     sync_num_concepts(config, trainset, log_file=log_file)
@@ -1193,16 +1275,18 @@ def sync_num_classes(config, dataset: "MNISTAddCovDataset", log_file=None) -> No
 
 def sync_num_covariates(config, dataset: "MNISTAddCovDataset", log_file=None) -> None:
     """
-    Keep `data.num_covariates` equal to the number of stacked digit channels.
+    Write back the channel count the split was actually built with.
 
-    This one is load-bearing: IntCEMMNISTEncoder builds its first conv with
-    in_channels=data.num_covariates, so a four-digit experiment left at the
-    two-digit default fails at the first forward pass.
+    The direction here is config -> data: `data.num_covariates` decides how many
+    digit channels get stacked, and the dataset already honoured it. This only
+    fills the key in when it was left unset (falling back to the experiment's
+    own digit count), so IntCEMMNISTEncoder -- whose first conv is built with
+    in_channels=data.num_covariates -- always matches the tensors it is fed.
     """
     num_covariates = dataset.num_digits
-    configured = _cfg_get(config, "num_covariates", num_covariates)
+    configured = _cfg_get(config, "num_covariates", None)
 
-    if configured != num_covariates:
+    if configured is not None and int(configured) != num_covariates:
         message = (
             f"MNIST-Add-Cov experiment={dataset.experiment}: "
             f"num_covariates {configured} -> {num_covariates}"
@@ -1290,6 +1374,7 @@ def save_MNIST_add_cov_data(config, train, val, test, log_file=None) -> str:
             "experiment": dataset.experiment,
             "planted_function": dataset.planted_function,
             "num_digits": dataset.num_digits,
+            "required_digits": dataset.required_digits,
             "corruption_channels": list(dataset.corruption_channels),
             "corruption": dataset.corruption,
             "corruption_strength": dataset.corruption_strength,
@@ -1315,7 +1400,10 @@ def save_MNIST_add_cov_data(config, train, val, test, log_file=None) -> str:
             f"p={test.corruption_probability})\n"
         )
         f.write(f"sizes: train={len(train)}, val={len(val)}, test={len(test)}\n")
-        f.write(f"num digit channels: {train.num_digits}\n")
+        f.write(
+            f"num digit channels: {train.num_digits} "
+            f"(experiment uses the first {train.required_digits})\n"
+        )
         f.write(f"observed concepts (full): {train.observed_concept_names}\n")
         f.write(f"oracle variables: {train.oracle_concept_names}\n")
         f.write(f"corrupted channels: {list(train.corruption_channels)}\n")
@@ -1363,6 +1451,7 @@ def load_saved_MNIST_add_cov_data(config, log_file=None):
         ),
         requested_experiment,
     )
+    num_covariates = resolve_num_digits(config, requested_experiment)
 
     mnist_by_source = {
         "train": MNIST(root=mnist_root, train=True, download=True),
@@ -1390,7 +1479,21 @@ def load_saved_MNIST_add_cov_data(config, log_file=None):
                 f"experiment={requested_experiment!r}. Use the matching split."
             )
 
+        # A materialised split fixes its own channel count, so num_covariates
+        # has to agree with it rather than reshape it.
+        saved_num_digits = int(
+            meta.get("num_digits", np.atleast_2d(manifest["digit_pairs"]).shape[1])
+        )
+        if saved_num_digits != num_covariates:
+            raise ValueError(
+                f"Saved split {data_dir_name!r} stacks {saved_num_digits} digit "
+                f"channels but data.num_covariates={num_covariates}. Set "
+                f"num_covariates={saved_num_digits}, or regenerate the split "
+                f"with data.save_data=True."
+            )
+
         dataset = MNISTAddCovDataset(
+            num_covariates=num_covariates,
             mnist_dataset=mnist_by_source[meta["mnist_source"]],
             class_pools=None,
             dataset_size=meta["dataset_size"],
@@ -1498,7 +1601,11 @@ def summarize_dataset(dataset: MNISTAddCovDataset) -> None:
 
     print(f"N={len(dataset)}")
     print(f"Experiment: {dataset.experiment}")
-    print(f"Digit channels: {dataset.num_digits}")
+    print(
+        f"Digit channels: {dataset.num_digits} "
+        f"({dataset.required_digits} used by the experiment, "
+        f"{dataset.num_digits - dataset.required_digits} distractor)"
+    )
     print(f"Concepts exposed: {dataset.concept_names()}")
     print(f"Observed concept means {names}: {concepts.mean(axis=0)}")
     print(f"Oracle means [A2,X]: {hidden.mean(axis=0)}")
@@ -1527,7 +1634,7 @@ def summarize_dataset(dataset: MNISTAddCovDataset) -> None:
                 )
         return
 
-    if dataset.num_digits == 4:
+    if dataset.required_digits == 4:
         print("Marginal concept-X correlations (the covariance target):")
         for j, name in enumerate(names):
             print(f"  Corr({name}, X) = {np.corrcoef(concepts[:, j], x)[0, 1]:+.4f}")
