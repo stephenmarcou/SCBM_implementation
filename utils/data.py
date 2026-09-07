@@ -12,7 +12,7 @@ from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, get_CUB_dataloaders
 from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
 from datasets.awa2_dataset import get_AWA2_dataloaders
-from datasets.MNIST_add_cov_dataset_old import (
+from datasets.MNIST_add_cov_dataset import (
     get_MNIST_add_cov_datasets,
     load_saved_MNIST_add_cov_data,
     save_MNIST_add_cov_data,
