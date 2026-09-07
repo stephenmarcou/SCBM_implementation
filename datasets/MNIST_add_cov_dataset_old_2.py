@@ -40,55 +40,6 @@ Supported experiments
    included in the supervised `concepts` tensor; it is retained only as oracle
    metadata for post-hoc residual recovery analysis.
 
-3) hidden_carry            <-- covariance-identifies-the-residual experiment
-   Input:
-       FOUR MNIST digit images stacked as channels -> [4, 28, 28]
-       d1, d2 are the addends; d3, d4 back the distractor concepts.
-
-   Exposed concepts:
-       A  = 1[d1 >= 5]
-       B  = 1[d2 >= 5]
-       D1 = 1[d3 >= 5]      distractor, independent of X
-       D2 = 1[d4 >= 5]      distractor, independent of X
-
-   Hidden/oracle variable:
-       X = 1[d1 + d2 >= 10]          the addition carry
-
-   Target:
-       y = 4*A + 2*B + X             # 8 encodings, 6 reachable
-
-   X is NOT a function of (A, B): when A != B the carry genuinely depends on
-   the digit values, so a linear head cannot shortcut it and must route X
-   through the residual channel. But X is strongly monotone in both parents:
-
-       P(X)=0.45, P(X|A=1)=0.70  ->  Cov(X,A)=0.125,  corr = +0.50
-       symmetric in B;  Cov(X,D1) = Cov(X,D2) = 0 exactly
-
-   So the learnt concept<->residual cross-block should light up on exactly
-   A and B and stay flat on D1 and D2. That contrast is the result.
-
-4) hidden_diff             <-- signed variant of the above
-       X = 1[d1 - d2 >= 2]
-       y = 4*A + 2*B + X
-   Same construction, but corr(X,A) = +0.50 and corr(X,B) = -0.50, so the
-   cross-block has to recover *direction* and not merely membership. Here X is
-   never determined by (A,B), for any value of (A,B).
-
-5) hidden_carry_swap       <-- specificity control
-       X = 1[d3 + d4 >= 10]          carry over the DISTRACTOR digits
-       y = 4*A + 2*B + X
-   The residual is still required, but now it should correlate with D1/D2 and
-   not with A/B. Confirms the cross-block tracks the residual's actual content
-   rather than whichever concepts happen to drive the target.
-
-6) hidden_carry_null       <-- calibration run
-       y = 2*A + B                   # 4 classes; X never enters the target
-   X is still recorded as an oracle. The residual has no job, so every
-   cross-block entry should go flat. This is what calibrates "how big is big".
-
-In every hidden_* experiment X is NEVER part of the supervised `concepts`
-tensor; it is oracle metadata only.
-
 The function get_MNIST_add_cov_datasets(...) returns Dataset objects rather
 than DataLoaders, matching the way the project's utils/data.py wraps datasets
 in a common DataLoader afterwards.
@@ -108,189 +59,16 @@ from torchvision.datasets import MNIST
 from torchvision.transforms import functional as TF
 
 
-# ---------------------------------------------------------------------------
-# Experiment registry
-# ---------------------------------------------------------------------------
-# Everything that differs between experiments lives here: how many digits the
-# input stacks, which observed concepts exist, how the hidden X and the task
-# label are built, and how many task classes result. Adding an experiment means
-# adding an entry plus a label function -- no changes anywhere else.
-#
-# Every experiment keeps the oracle bank at a fixed width [A2, X] so that
-# `hidden_concepts`, sample["A2"] and sample["X"] have the same shape for all
-# experiments and downstream collation is unaffected.
-
-
-def _labels_original(digits, planted_function):
-    d1, d2 = int(digits[0]), int(digits[1])
-    a1 = int(d1 % 2 == 1)
-    a2 = int(d2 % 2 == 1)
-    h1 = int(d1 >= 6)
-    h2 = int(d2 >= 6)
-
-    x = _planted_x(a1, a2, planted_function)
-    m = int(h1 or h2)
-    return [a1, h1, h2], [a2, x], 4 * a1 + 2 * m + x
-
-
-def _labels_hidden_xor(digits, planted_function):
-    d1, d2 = int(digits[0]), int(digits[1])
-    a1 = int(d1 % 2 == 1)
-    a2 = int(d2 % 2 == 1)
-    h1 = int(d1 >= 6)
-    h2 = int(d2 >= 6)
-
-    # X is a nonlinear function of the TWO KNOWN concepts H1 and H2.
-    x = int(bool(h1) ^ bool(h2))
-    return [a1, h1, h2], [a2, x], x
-
-
-def _carry_concepts(digits):
-    """Shared [A, B, D1, D2] bank for the four-digit experiments."""
-    d1, d2, d3, d4 = (int(d) for d in digits[:4])
-    return [int(d1 >= 5), int(d2 >= 5), int(d3 >= 5), int(d4 >= 5)]
-
-
-def _labels_hidden_carry(digits, planted_function):
-    d1, d2 = int(digits[0]), int(digits[1])
-    concepts = _carry_concepts(digits)
-    a2 = int(d2 % 2 == 1)
-
-    x = int(d1 + d2 >= 10)  # the addition carry
-    task = 4 * concepts[0] + 2 * concepts[1] + x
-    return concepts, [a2, x], task
-
-
-def _labels_hidden_diff(digits, planted_function):
-    d1, d2 = int(digits[0]), int(digits[1])
-    concepts = _carry_concepts(digits)
-    a2 = int(d2 % 2 == 1)
-
-    x = int(d1 - d2 >= 2)  # corr(X,A) = +0.5, corr(X,B) = -0.5
-    task = 4 * concepts[0] + 2 * concepts[1] + x
-    return concepts, [a2, x], task
-
-
-def _labels_hidden_carry_swap(digits, planted_function):
-    d2, d3, d4 = int(digits[1]), int(digits[2]), int(digits[3])
-    concepts = _carry_concepts(digits)
-    a2 = int(d2 % 2 == 1)
-
-    x = int(d3 + d4 >= 10)  # carry over the DISTRACTOR digits
-    task = 4 * concepts[0] + 2 * concepts[1] + x
-    return concepts, [a2, x], task
-
-
-def _labels_hidden_carry_null(digits, planted_function):
-    d1, d2 = int(digits[0]), int(digits[1])
-    concepts = _carry_concepts(digits)
-    a2 = int(d2 % 2 == 1)
-
-    x = int(d1 + d2 >= 10)  # recorded as oracle, but absent from the target
-    task = 2 * concepts[0] + concepts[1]
-    return concepts, [a2, x], task
-
-
-_CARRY_CONCEPT_NAMES = [
-    "A::digit1_ge_5",
-    "B::digit2_ge_5",
-    "D1::digit3_ge_5",
-    "D2::digit4_ge_5",
+OBSERVED_CONCEPT_NAMES = [
+    "A1::digit1_is_odd",
+    "H1::digit1_ge_6",
+    "H2::digit2_ge_6",
 ]
 
-EXPERIMENT_SPECS: Dict[str, Dict] = {
-    "original": {
-        "num_digits": 2,
-        "concept_names": [
-            "A1::digit1_is_odd",
-            "H1::digit1_ge_6",
-            "H2::digit2_ge_6",
-        ],
-        "oracle_names": ["A2::digit2_is_odd", "X::planted_hidden_function"],
-        "num_classes": 8,
-        "label_fn": _labels_original,
-        "auto_removed": [],       # concepts withheld just by picking this mode
-        "protected": [],          # concepts that must stay in the bottleneck
-        "corrupt_channels": (0,), # which digit channels corruption touches
-        "uses_planted_function": True,
-    },
-    "hidden_xor": {
-        "num_digits": 2,
-        "concept_names": [
-            "A1::digit1_is_odd",
-            "H1::digit1_ge_6",
-            "H2::digit2_ge_6",
-        ],
-        "oracle_names": ["A2::digit2_is_odd", "X::h1_xor_h2"],
-        "num_classes": 2,
-        "label_fn": _labels_hidden_xor,
-        "auto_removed": [0],      # A1 hidden automatically
-        "protected": [1, 2],      # H1, H2 must remain exposed
-        "corrupt_channels": (0,),
-        "uses_planted_function": False,
-    },
-    "hidden_carry": {
-        "num_digits": 4,
-        "concept_names": list(_CARRY_CONCEPT_NAMES),
-        "oracle_names": ["A2::digit2_is_odd", "X::carry_d1_plus_d2_ge_10"],
-        "num_classes": 8,
-        "label_fn": _labels_hidden_carry,
-        "auto_removed": [],
-        "protected": [0, 1],      # A and B are the parents of X
-        "corrupt_channels": "all",
-        "uses_planted_function": False,
-    },
-    "hidden_diff": {
-        "num_digits": 4,
-        "concept_names": list(_CARRY_CONCEPT_NAMES),
-        "oracle_names": ["A2::digit2_is_odd", "X::d1_minus_d2_ge_2"],
-        "num_classes": 8,
-        "label_fn": _labels_hidden_diff,
-        "auto_removed": [],
-        "protected": [0, 1],
-        "corrupt_channels": "all",
-        "uses_planted_function": False,
-    },
-    "hidden_carry_swap": {
-        "num_digits": 4,
-        "concept_names": list(_CARRY_CONCEPT_NAMES),
-        "oracle_names": ["A2::digit2_is_odd", "X::carry_d3_plus_d4_ge_10"],
-        "num_classes": 8,
-        "label_fn": _labels_hidden_carry_swap,
-        "auto_removed": [],
-        "protected": [0, 1, 2, 3],
-        "corrupt_channels": "all",
-        "uses_planted_function": False,
-    },
-    "hidden_carry_null": {
-        "num_digits": 4,
-        "concept_names": list(_CARRY_CONCEPT_NAMES),
-        "oracle_names": ["A2::digit2_is_odd", "X::carry_unused_by_target"],
-        "num_classes": 4,
-        "label_fn": _labels_hidden_carry_null,
-        "auto_removed": [],
-        "protected": [0, 1],
-        "corrupt_channels": "all",
-        "uses_planted_function": False,
-    },
-}
-
-# Backwards-compatible module-level names: these describe experiment
-# 'original', which is what they always described.
-OBSERVED_CONCEPT_NAMES = EXPERIMENT_SPECS["original"]["concept_names"]
-ORACLE_NAMES = EXPERIMENT_SPECS["original"]["oracle_names"]
-
-
-def get_experiment_spec(experiment: str) -> Dict:
-    return EXPERIMENT_SPECS[_normalize_experiment(experiment)]
-
-
-def experiment_concept_names(experiment: str) -> List[str]:
-    return list(get_experiment_spec(experiment)["concept_names"])
-
-
-def experiment_num_digits(experiment: str) -> int:
-    return int(get_experiment_spec(experiment)["num_digits"])
+ORACLE_NAMES = [
+    "A2::digit2_is_odd",
+    "X::planted_hidden_function",
+]
 
 
 def _cfg_get(config, name: str, default):
@@ -315,21 +93,13 @@ def _normalize_experiment(experiment: str) -> str:
         "mnist_add_cov": "original",
         "xor": "hidden_xor",
         "known_concept_xor": "hidden_xor",
-        "carry": "hidden_carry",
-        "hidden_add_carry": "hidden_carry",
-        "diff": "hidden_diff",
-        "hidden_difference": "hidden_diff",
-        "carry_swap": "hidden_carry_swap",
-        "swap": "hidden_carry_swap",
-        "carry_null": "hidden_carry_null",
-        "null": "hidden_carry_null",
     }
     experiment = aliases.get(experiment, experiment)
 
-    if experiment not in EXPERIMENT_SPECS:
+    if experiment not in {"original", "hidden_xor"}:
         raise ValueError(
             f"Unknown MNIST-Add-Cov experiment={experiment!r}. "
-            f"Choose one of: {sorted(EXPERIMENT_SPECS)}."
+            "Choose one of: 'original', 'hidden_xor'."
         )
     return experiment
 
@@ -428,95 +198,21 @@ def _balanced_digit_pairs(n_samples: int, seed: int) -> np.ndarray:
     return pairs
 
 
-def _balanced_digit_tuples(n_samples: int, num_digits: int, seed: int) -> np.ndarray:
-    """
-    Generate digit identities for `num_digits` channels, shape [n_samples, num_digits].
-
-    num_digits == 2 delegates to _balanced_digit_pairs unchanged, so splits for
-    'original' and 'hidden_xor' are bit-identical to before this file grew the
-    four-digit experiments.
-
-    num_digits == 4 stacks two independently drawn balanced pairs: (d1, d2) is
-    exactly uniform over the 100 ordered pairs, (d3, d4) likewise, and the two
-    halves are independent of each other. That independence is what makes the
-    distractor concepts D1/D2 exactly uncorrelated with a hidden X built from
-    d1 and d2 (and vice versa for hidden_carry_swap).
-    """
-    if num_digits == 2:
-        return _balanced_digit_pairs(n_samples, seed=seed)
-
-    if num_digits % 2 != 0:
-        raise ValueError(f"num_digits must be even, got {num_digits}.")
-
-    halves = [
-        _balanced_digit_pairs(n_samples, seed=seed + block * 5_000_011)
-        for block in range(num_digits // 2)
-    ]
-    return np.concatenate(halves, axis=1)
-
-
 def _sample_source_indices(
-    digit_tuples: np.ndarray,
+    digit_pairs: np.ndarray,
     class_pools: Dict[int, np.ndarray],
     seed: int,
-) -> np.ndarray:
-    """
-    Choose an actual MNIST image for each desired digit identity.
-
-    Returns [n_samples, num_digits]. The RNG is consumed in the same order as
-    the original two-digit implementation (all digits of sample 0, then all
-    digits of sample 1, ...), so two-digit splits are unchanged.
-    """
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Choose an actual MNIST image for each desired digit identity."""
     rng = np.random.default_rng(seed)
-    digit_tuples = np.atleast_2d(digit_tuples)
-    n_samples, num_digits = digit_tuples.shape
+    idx1 = np.empty(len(digit_pairs), dtype=np.int64)
+    idx2 = np.empty(len(digit_pairs), dtype=np.int64)
 
-    source_indices = np.empty((n_samples, num_digits), dtype=np.int64)
-    for i in range(n_samples):
-        for j in range(num_digits):
-            source_indices[i, j] = rng.choice(class_pools[int(digit_tuples[i, j])])
+    for i, (d1, d2) in enumerate(digit_pairs):
+        idx1[i] = rng.choice(class_pools[int(d1)])
+        idx2[i] = rng.choice(class_pools[int(d2)])
 
-    return source_indices
-
-
-def _resolve_corruption_channels(channels, num_digits: int) -> Tuple[int, ...]:
-    """
-    Turn a corruption-channel setting into concrete channel indices.
-
-    Accepts 'first', 'all', a single index, or an explicit list of indices.
-
-    Which channels are corrupted matters more than it looks. Sigma is a function
-    of the image (the model predicts it from the encoder features), so it
-    measures how concept uncertainty co-varies with residual uncertainty *given
-    that image*. A concept read off a clean, unambiguous digit has essentially
-    no uncertainty, so its Sigma diagonal collapses toward zero and its
-    cross-block entry is a 0/0 ratio carrying no information. For the four-digit
-    experiments the distractors therefore have to be corrupted on the same terms
-    as the parents, otherwise "A and B light up, D1 and D2 stay flat" is an
-    artifact of who got corrupted rather than a fact about the residual.
-    """
-    if isinstance(channels, str):
-        key = channels.strip().lower()
-        if key == "first":
-            return (0,)
-        if key == "all":
-            return tuple(range(num_digits))
-        raise ValueError(
-            f"Unknown corruption_channels={channels!r}. "
-            "Use 'first', 'all', an index, or a list of indices."
-        )
-
-    if isinstance(channels, int):
-        channels = [channels]
-
-    resolved = sorted({int(c) for c in channels})
-    for c in resolved:
-        if not 0 <= c < num_digits:
-            raise ValueError(
-                f"corruption_channels index {c} out of range for "
-                f"{num_digits} digit channels."
-            )
-    return tuple(resolved)
+    return idx1, idx2
 
 
 def _apply_corruption(
@@ -525,7 +221,7 @@ def _apply_corruption(
     strength: float,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    """Corrupt a single digit image. image shape: [1, 28, 28]."""
+    """Corrupt ONLY the first digit image. image shape: [1, 28, 28]."""
     corruption = corruption.lower()
 
     if corruption in {"none", "", "clean"} or strength <= 0:
@@ -611,7 +307,6 @@ class MNISTAddCovDataset(Dataset):
         corruption_probability: float = 1.0,
         manifest: Optional[Dict[str, np.ndarray]] = None,
         removed_concepts: Optional[List[int]] = None,
-        corruption_channels=None,
     ):
         super().__init__()
 
@@ -621,21 +316,6 @@ class MNISTAddCovDataset(Dataset):
         self.experiment = _normalize_experiment(experiment)
         self.planted_function = planted_function.lower()
 
-        # Everything experiment-specific comes from the registry.
-        self.spec = EXPERIMENT_SPECS[self.experiment]
-        self.num_digits = int(self.spec["num_digits"])
-        self.observed_concept_names = list(self.spec["concept_names"])
-        self.oracle_concept_names = list(self.spec["oracle_names"])
-        self.num_classes = int(self.spec["num_classes"])
-        self._label_fn = self.spec["label_fn"]
-
-        self.corruption_channels = _resolve_corruption_channels(
-            corruption_channels
-            if corruption_channels is not None
-            else self.spec["corrupt_channels"],
-            self.num_digits,
-        )
-
         self.corruption = corruption.lower()
         self.corruption_strength = float(corruption_strength)
         self.corruption_probability = float(corruption_probability)
@@ -643,12 +323,11 @@ class MNISTAddCovDataset(Dataset):
         if not (0.0 <= self.corruption_probability <= 1.0):
             raise ValueError("corruption_probability must be in [0,1].")
 
-        # Pixels of the corrupted digit channels, when they were materialised to
+        # Pixels of the corrupted first digit, when they were materialised to
         # disk alongside the manifest. They are the one part of the sample that
         # a seed alone does not pin across environments (torch RNG), so a saved
         # split stores them rather than regenerating them.
-        # Shape: [N, len(corruption_channels), 28, 28].
-        self.corrupted_digits: Optional[np.ndarray] = None
+        self.corrupted_first_digit: Optional[np.ndarray] = None
 
         # Observed concept columns dropped from the bottleneck (§ incomplete
         # variants). The split itself is untouched -- same samples, same labels,
@@ -656,7 +335,7 @@ class MNISTAddCovDataset(Dataset):
         # with the complete one.
         self.removed_concept_idx = sorted(int(i) for i in (removed_concepts or []))
         self.kept_concept_idx = [
-            i for i in range(len(self.observed_concept_names))
+            i for i in range(len(OBSERVED_CONCEPT_NAMES))
             if i not in self.removed_concept_idx
         ]
 
@@ -665,14 +344,10 @@ class MNISTAddCovDataset(Dataset):
             return
 
         # 1) Choose digit identities with an exactly balanced pair distribution.
-        self.digit_pairs = _balanced_digit_tuples(
-            self.dataset_size,
-            num_digits=self.num_digits,
-            seed=self.seed,
-        )
+        self.digit_pairs = _balanced_digit_pairs(self.dataset_size, seed=self.seed)
 
         # 2) Choose actual MNIST images conditional on those identities.
-        self.source_indices = _sample_source_indices(
+        self.idx1, self.idx2 = _sample_source_indices(
             self.digit_pairs,
             class_pools,
             seed=self.seed + 1,
@@ -684,69 +359,58 @@ class MNISTAddCovDataset(Dataset):
             rng.random(self.dataset_size) < self.corruption_probability
         )
 
-        # Precompute all symbolic labels via the experiment's label function.
-        n_observed = len(self.observed_concept_names)
-        n_oracle = len(self.oracle_concept_names)
-
-        self.observed_concepts = np.zeros(
-            (self.dataset_size, n_observed), dtype=np.float32
-        )
-        self.hidden_concepts = np.zeros((self.dataset_size, n_oracle), dtype=np.float32)
+        # Precompute all symbolic labels.
+        self.observed_concepts = np.zeros((self.dataset_size, 3), dtype=np.float32)
+        self.hidden_concepts = np.zeros((self.dataset_size, 2), dtype=np.float32)
         self.task_labels = np.zeros(self.dataset_size, dtype=np.int64)
 
-        for i, digits in enumerate(self.digit_pairs):
-            observed, oracle, task_label = self._label_fn(digits, self.planted_function)
+        for i, (d1, d2) in enumerate(self.digit_pairs):
+            a1 = int(d1 % 2 == 1)
+            a2 = int(d2 % 2 == 1)
+            h1 = int(d1 >= 6)
+            h2 = int(d2 >= 6)
+
+            if self.experiment == "original":
+                x_hidden = _planted_x(a1, a2, self.planted_function)
+                m = int(h1 or h2)
+                task_label = 4 * a1 + 2 * m + x_hidden
+            elif self.experiment == "hidden_xor":
+                # New controlled experiment:
+                # X is a nonlinear function of the TWO KNOWN concepts H1 and H2.
+                x_hidden = int(bool(h1) ^ bool(h2))
+                task_label = x_hidden
+            else:  # guarded by _normalize_experiment
+                raise RuntimeError(f"Unhandled experiment: {self.experiment}")
 
             # Store the full observed-concept bank. Which columns are exposed is
             # determined by kept_concept_idx / removed_concept_idx.
-            self.observed_concepts[i] = np.asarray(observed, dtype=np.float32)
+            self.observed_concepts[i] = np.array([a1, h1, h2], dtype=np.float32)
 
             # Retained only for evaluation/validation after training.
-            self.hidden_concepts[i] = np.asarray(oracle, dtype=np.float32)
+            self.hidden_concepts[i] = np.array([a2, x_hidden], dtype=np.float32)
 
-            self.task_labels[i] = int(task_label)
+            self.task_labels[i] = task_label
 
     def _load_from_manifest(self, manifest: Dict[str, np.ndarray]) -> None:
         """Adopt a split that was generated once and written to disk."""
-        self.digit_pairs = np.atleast_2d(manifest["digit_pairs"].astype(np.int64))
-
-        if "source_indices" in manifest:
-            self.source_indices = np.atleast_2d(
-                manifest["source_indices"].astype(np.int64)
-            )
-        else:
-            # Splits written before the four-digit experiments existed.
-            self.source_indices = np.column_stack(
-                [manifest["idx1"].astype(np.int64), manifest["idx2"].astype(np.int64)]
-            )
-
+        self.digit_pairs = manifest["digit_pairs"].astype(np.int64)
+        self.idx1 = manifest["idx1"].astype(np.int64)
+        self.idx2 = manifest["idx2"].astype(np.int64)
         self.corruption_mask = manifest["corruption_mask"].astype(bool)
         self.observed_concepts = manifest["observed_concepts"].astype(np.float32)
         self.hidden_concepts = manifest["hidden_concepts"].astype(np.float32)
         self.task_labels = manifest["task_labels"].astype(np.int64)
 
-        if "corrupted_digits" in manifest:
-            self.corrupted_digits = manifest["corrupted_digits"].astype(np.float32)
-        elif "corrupted_first_digit" in manifest:
-            # Old key: [N, 1, 28, 28], channel 0 only.
-            self.corrupted_digits = manifest["corrupted_first_digit"].astype(np.float32)
+        if "corrupted_first_digit" in manifest:
+            self.corrupted_first_digit = manifest["corrupted_first_digit"].astype(
+                np.float32
+            )
 
         self.dataset_size = len(self.digit_pairs)
 
-        if self.digit_pairs.shape[1] != self.num_digits:
-            raise ValueError(
-                f"Split manifest holds {self.digit_pairs.shape[1]} digit columns "
-                f"but experiment={self.experiment!r} needs {self.num_digits}."
-            )
-        if self.observed_concepts.shape[1] != len(self.observed_concept_names):
-            raise ValueError(
-                f"Split manifest holds {self.observed_concepts.shape[1]} observed "
-                f"concepts but experiment={self.experiment!r} defines "
-                f"{len(self.observed_concept_names)}."
-            )
-
         for name, arr in (
-            ("source_indices", self.source_indices),
+            ("idx1", self.idx1),
+            ("idx2", self.idx2),
             ("corruption_mask", self.corruption_mask),
             ("observed_concepts", self.observed_concepts),
             ("hidden_concepts", self.hidden_concepts),
@@ -760,21 +424,11 @@ class MNISTAddCovDataset(Dataset):
 
     def concept_names(self) -> List[str]:
         """Names of the concepts actually exposed in the bottleneck."""
-        return [self.observed_concept_names[i] for i in self.kept_concept_idx]
+        return [OBSERVED_CONCEPT_NAMES[i] for i in self.kept_concept_idx]
 
     def removed_concept_names(self) -> List[str]:
         """Names of the observed concepts withheld from the bottleneck."""
-        return [self.observed_concept_names[i] for i in self.removed_concept_idx]
-
-    @property
-    def idx1(self) -> np.ndarray:
-        """Back-compat accessor: MNIST source index of the first digit."""
-        return self.source_indices[:, 0]
-
-    @property
-    def idx2(self) -> np.ndarray:
-        """Back-compat accessor: MNIST source index of the second digit."""
-        return self.source_indices[:, 1]
+        return [OBSERVED_CONCEPT_NAMES[i] for i in self.removed_concept_idx]
 
     def fingerprint(self) -> str:
         """
@@ -813,18 +467,11 @@ class MNISTAddCovDataset(Dataset):
             [self[int(i)]["features"] for i in probe_idx]
         ).numpy()
 
-        # Hash the source-index columns separately rather than the [N, D] block,
-        # so a two-digit split hashes exactly as it did when these were stored
-        # as separate idx1/idx2 arrays.
-        source_columns = [
-            np.ascontiguousarray(self.source_indices[:, j])
-            for j in range(self.source_indices.shape[1])
-        ]
-
         return _fingerprint_arrays(
             np.frombuffer(spec.encode(), dtype=np.uint8),
             self.digit_pairs,
-            *source_columns,
+            self.idx1,
+            self.idx2,
             self.corruption_mask,
             self.observed_concepts,
             self.hidden_concepts,
@@ -840,12 +487,10 @@ class MNISTAddCovDataset(Dataset):
         return img.unsqueeze(0)  # [1, 28, 28]
 
     def __getitem__(self, index: int):
-        digits = self.digit_pairs[index]
+        d1, d2 = self.digit_pairs[index]
 
-        images = [
-            self._load_mnist_tensor(self.source_indices[index, j])
-            for j in range(self.num_digits)
-        ]
+        img1 = self._load_mnist_tensor(self.idx1[index])
+        img2 = self._load_mnist_tensor(self.idx2[index])
 
         is_corrupted = bool(
             self.corruption_mask[index]
@@ -854,34 +499,26 @@ class MNISTAddCovDataset(Dataset):
         )
 
         if is_corrupted:
-            for slot, channel in enumerate(self.corruption_channels):
-                if self.corrupted_digits is not None:
-                    # Materialised split: read the pixels back rather than
-                    # re-drawing them from a torch RNG.
-                    images[channel] = torch.from_numpy(
-                        self.corrupted_digits[index, slot]
-                    ).float().unsqueeze(0)
-                else:
-                    # Deterministic corruption per (sample, channel). The
-                    # channel offset is chosen so channel 0 keeps the seed the
-                    # two-digit experiments always used.
-                    g = torch.Generator()
-                    g.manual_seed(
-                        self.seed * 1_000_003 + int(index) + channel * 7_000_003
-                    )
-                    images[channel] = _apply_corruption(
-                        images[channel],
-                        corruption=self.corruption,
-                        strength=self.corruption_strength,
-                        generator=g,
-                    )
+            if self.corrupted_first_digit is not None:
+                # Materialised split: read the pixels back rather than
+                # re-drawing them from a torch RNG.
+                img1 = torch.from_numpy(self.corrupted_first_digit[index]).float()
+            else:
+                # Deterministic corruption for each sample.
+                g = torch.Generator()
+                g.manual_seed(self.seed * 1_000_003 + int(index))
+                img1 = _apply_corruption(
+                    img1,
+                    corruption=self.corruption,
+                    strength=self.corruption_strength,
+                    generator=g,
+                )
 
-        # Single-backbone input, the digits as channels: [num_digits, 28, 28].
+        # Single-backbone input, the two digits as channels: [2, 28, 28].
         # Channel stacking rather than horizontal concatenation, to match
-        # data.num_covariates and IntCEMMNISTEncoder, whose first conv takes
+        # data.num_covariates=2 and IntCEMMNISTEncoder, whose first conv takes
         # num_covariates channels and whose projection assumes a 28x28 map.
-        # NOTE: set data.num_covariates = 4 for the four-digit experiments.
-        features = torch.cat(images, dim=0)
+        features = torch.cat([img1, img2], dim=0)
 
         all_observed = torch.from_numpy(self.observed_concepts[index]).float()
         concepts = all_observed[self.kept_concept_idx]
@@ -896,13 +533,11 @@ class MNISTAddCovDataset(Dataset):
             "concepts": concepts,
 
             # Oracle-only analysis metadata; NOT part of `concepts`.
-            "hidden_concepts": hidden,      # [A2, X] for every experiment
+            "hidden_concepts": hidden,      # [A2, X]
             "removed_concepts": removed,    # observed concepts held out, if any
             "A2": hidden[0],
             "X": hidden[1],
-            "digit_labels": torch.tensor(
-                [int(d) for d in digits], dtype=torch.long
-            ),
+            "digit_labels": torch.tensor([int(d1), int(d2)], dtype=torch.long),
             "is_corrupted": torch.tensor(is_corrupted, dtype=torch.bool),
         }
 
@@ -971,14 +606,20 @@ def get_MNIST_add_cov_datasets(
     experiment = _normalize_experiment(_cfg_get(config, "experiment", "original"))
     planted_function = str(_cfg_get(config, "planted_function", "xor"))
 
-    removed_concepts = _apply_experiment_concept_rules(
-        resolve_removed_concepts(
-            _cfg_get(config, "removed_concepts", None), experiment=experiment
-        ),
-        experiment,
+    removed_concepts = resolve_removed_concepts(
+        _cfg_get(config, "removed_concepts", None)
     )
 
-    corruption_channels = _cfg_get(config, "corruption_channels", None)
+    if experiment == "hidden_xor":
+        # The experiment is defined specifically around known H1/H2 -> hidden X.
+        # Automatically hide A1 so selecting the experiment in YAML is sufficient.
+        if any(i in removed_concepts for i in (1, 2)):
+            raise ValueError(
+                "experiment='hidden_xor' requires H1 and H2 to remain exposed. "
+                "Do not remove H1 or H2 in data.removed_concepts."
+            )
+        removed_concepts = sorted(set(removed_concepts + [0]))
+
     corruption = str(_cfg_get(config, "corruption", "none"))
     corruption_strength = float(_cfg_get(config, "corruption_strength", 0.0))
     corruption_probability = float(_cfg_get(config, "corruption_probability", 1.0))
@@ -1013,7 +654,6 @@ def get_MNIST_add_cov_datasets(
         corruption=corruption,
         corruption_strength=corruption_strength,
         corruption_probability=corruption_probability,
-        corruption_channels=corruption_channels,
     )
 
     valset = MNISTAddCovDataset(
@@ -1027,7 +667,6 @@ def get_MNIST_add_cov_datasets(
         corruption=corruption,
         corruption_strength=corruption_strength,
         corruption_probability=corruption_probability,
-        corruption_channels=corruption_channels,
     )
 
     testset = MNISTAddCovDataset(
@@ -1041,12 +680,10 @@ def get_MNIST_add_cov_datasets(
         corruption=test_corruption,
         corruption_strength=test_corruption_strength,
         corruption_probability=test_corruption_probability,
-        corruption_channels=corruption_channels,
     )
 
     sync_num_concepts(config, trainset, log_file=log_file)
     sync_num_classes(config, trainset, log_file=log_file)
-    sync_num_covariates(config, trainset, log_file=log_file)
 
     log_split_fingerprints(
         {"train": trainset, "val": valset, "test": testset},
@@ -1062,7 +699,8 @@ def get_MNIST_add_cov_datasets(
 SPLIT_ROOT = "splits"
 MANIFEST_KEYS = (
     "digit_pairs",
-    "source_indices",
+    "idx1",
+    "idx2",
     "corruption_mask",
     "observed_concepts",
     "hidden_concepts",
@@ -1073,46 +711,19 @@ MANIFEST_KEYS = (
 SPLIT_MNIST_SOURCE = {"train": "train", "val": "train", "test": "test"}
 
 
-def _apply_experiment_concept_rules(removed_concepts: List[int], experiment: str) -> List[int]:
-    """
-    Fold the experiment's own bottleneck rules into the removal list.
-
-    Each spec declares `auto_removed` (concepts hidden simply by selecting the
-    experiment, e.g. A1 in hidden_xor) and `protected` (concepts the experiment
-    is defined around and that therefore must stay exposed).
-    """
-    spec = EXPERIMENT_SPECS[_normalize_experiment(experiment)]
-    names = spec["concept_names"]
-
-    clashes = [i for i in spec["protected"] if i in removed_concepts]
-    if clashes:
-        raise ValueError(
-            f"experiment={experiment!r} requires "
-            f"{[names[i].split('::')[0] for i in spec['protected']]} to remain "
-            f"exposed, but data.removed_concepts removes "
-            f"{[names[i].split('::')[0] for i in clashes]}."
-        )
-
-    return sorted(set(removed_concepts) | set(spec["auto_removed"]))
-
-
-def resolve_removed_concepts(removed, experiment: str = "original") -> List[int]:
+def resolve_removed_concepts(removed) -> List[int]:
     """
     Turn a config entry into observed-concept column indices.
 
-    Accepts indices, full names ("A1::digit1_is_odd") or short names ("A1"),
-    so the config can read either way. The valid names depend on the selected
-    experiment, hence the `experiment` argument (defaulting to 'original', which
-    is what this function always assumed).
+    Accepts indices (0..2), full names ("A1::digit1_is_odd") or short names
+    ("A1"), so the config can read either way.
     """
-    observed_names = experiment_concept_names(experiment)
-
     if removed is None:
         return []
     if isinstance(removed, (int, str)):
         removed = [removed]
 
-    short_names = [name.split("::")[0] for name in observed_names]
+    short_names = [name.split("::")[0] for name in OBSERVED_CONCEPT_NAMES]
 
     indices = []
     for entry in removed:
@@ -1120,25 +731,24 @@ def resolve_removed_concepts(removed, experiment: str = "original") -> List[int]
             raise ValueError(f"Invalid removed_concepts entry: {entry!r}")
         if isinstance(entry, int):
             index = entry
-        elif entry in observed_names:
-            index = observed_names.index(entry)
+        elif entry in OBSERVED_CONCEPT_NAMES:
+            index = OBSERVED_CONCEPT_NAMES.index(entry)
         elif entry in short_names:
             index = short_names.index(entry)
         else:
             raise ValueError(
-                f"Unknown concept {entry!r} for experiment={experiment!r}. "
-                f"Use an index in [0, {len(observed_names) - 1}] or one of "
-                f"{observed_names} / {short_names}."
+                f"Unknown concept {entry!r}. Use an index in "
+                f"[0, {len(OBSERVED_CONCEPT_NAMES) - 1}] or one of "
+                f"{OBSERVED_CONCEPT_NAMES} / {short_names}."
             )
-        if not 0 <= index < len(observed_names):
+        if not 0 <= index < len(OBSERVED_CONCEPT_NAMES):
             raise ValueError(
                 f"removed_concepts index {index} out of range for "
-                f"{len(observed_names)} observed concepts in "
-                f"experiment={experiment!r}."
+                f"{len(OBSERVED_CONCEPT_NAMES)} observed concepts."
             )
         indices.append(index)
 
-    if len(set(indices)) == len(observed_names):
+    if len(set(indices)) == len(OBSERVED_CONCEPT_NAMES):
         raise ValueError("Cannot remove every observed concept.")
 
     return sorted(set(indices))
@@ -1172,7 +782,7 @@ def sync_num_concepts(config, dataset: "MNISTAddCovDataset", log_file=None) -> N
 
 def sync_num_classes(config, dataset: "MNISTAddCovDataset", log_file=None) -> None:
     """Keep data.num_classes aligned with the selected experiment."""
-    num_classes = dataset.num_classes
+    num_classes = 2 if dataset.experiment == "hidden_xor" else 8
     configured = _cfg_get(config, "num_classes", num_classes)
 
     if configured != num_classes:
@@ -1187,33 +797,6 @@ def sync_num_classes(config, dataset: "MNISTAddCovDataset", log_file=None) -> No
 
     try:
         config.num_classes = num_classes
-    except Exception:
-        pass
-
-
-def sync_num_covariates(config, dataset: "MNISTAddCovDataset", log_file=None) -> None:
-    """
-    Keep `data.num_covariates` equal to the number of stacked digit channels.
-
-    This one is load-bearing: IntCEMMNISTEncoder builds its first conv with
-    in_channels=data.num_covariates, so a four-digit experiment left at the
-    two-digit default fails at the first forward pass.
-    """
-    num_covariates = dataset.num_digits
-    configured = _cfg_get(config, "num_covariates", num_covariates)
-
-    if configured != num_covariates:
-        message = (
-            f"MNIST-Add-Cov experiment={dataset.experiment}: "
-            f"num_covariates {configured} -> {num_covariates}"
-        )
-        print(message)
-        if log_file is not None:
-            with open(log_file, "a") as f:
-                f.write(message + "\n")
-
-    try:
-        config.num_covariates = num_covariates
     except Exception:
         pass
 
@@ -1269,16 +852,13 @@ def save_MNIST_add_cov_data(config, train, val, test, log_file=None) -> str:
             dataset.corruption_strength > 0
         ):
             # Corrupted pixels are the only part not derivable from the MNIST
-            # files plus the manifest, so store them explicitly -- one plane per
-            # corrupted channel, in the order of dataset.corruption_channels.
-            channels = list(dataset.corruption_channels)
-            arrays["corrupted_digits"] = np.stack(
+            # files plus the manifest, so store them explicitly.
+            arrays["corrupted_first_digit"] = np.stack(
                 [
-                    dataset[i]["features"][channels].numpy()
+                    dataset[i]["features"][0:1].numpy()
                     for i in range(len(dataset))
                 ]
             ).astype(np.float32)
-            arrays["corruption_channels"] = np.asarray(channels, dtype=np.int64)
 
         np.savez_compressed(os.path.join(split_dir, "manifest.npz"), **arrays)
 
@@ -1289,8 +869,6 @@ def save_MNIST_add_cov_data(config, train, val, test, log_file=None) -> str:
             "seed": dataset.seed,
             "experiment": dataset.experiment,
             "planted_function": dataset.planted_function,
-            "num_digits": dataset.num_digits,
-            "corruption_channels": list(dataset.corruption_channels),
             "corruption": dataset.corruption,
             "corruption_strength": dataset.corruption_strength,
             "corruption_probability": dataset.corruption_probability,
@@ -1315,10 +893,8 @@ def save_MNIST_add_cov_data(config, train, val, test, log_file=None) -> str:
             f"p={test.corruption_probability})\n"
         )
         f.write(f"sizes: train={len(train)}, val={len(val)}, test={len(test)}\n")
-        f.write(f"num digit channels: {train.num_digits}\n")
-        f.write(f"observed concepts (full): {train.observed_concept_names}\n")
-        f.write(f"oracle variables: {train.oracle_concept_names}\n")
-        f.write(f"corrupted channels: {list(train.corruption_channels)}\n")
+        f.write(f"observed concepts (full): {OBSERVED_CONCEPT_NAMES}\n")
+        f.write(f"oracle variables: {ORACLE_NAMES}\n")
         f.write(
             "concept removal is applied at load time from data.removed_concepts, "
             "so incomplete runs reuse this exact split\n"
@@ -1356,13 +932,17 @@ def load_saved_MNIST_add_cov_data(config, log_file=None):
     requested_experiment = _normalize_experiment(
         _cfg_get(config, "experiment", "original")
     )
-    removed_concepts = _apply_experiment_concept_rules(
-        resolve_removed_concepts(
-            _cfg_get(config, "removed_concepts", None),
-            experiment=requested_experiment,
-        ),
-        requested_experiment,
+    removed_concepts = resolve_removed_concepts(
+        _cfg_get(config, "removed_concepts", None)
     )
+
+    if requested_experiment == "hidden_xor":
+        if any(i in removed_concepts for i in (1, 2)):
+            raise ValueError(
+                "experiment='hidden_xor' requires H1 and H2 to remain exposed. "
+                "Do not remove H1 or H2 in data.removed_concepts."
+            )
+        removed_concepts = sorted(set(removed_concepts + [0]))
 
     mnist_by_source = {
         "train": MNIST(root=mnist_root, train=True, download=True),
@@ -1402,14 +982,12 @@ def load_saved_MNIST_add_cov_data(config, log_file=None):
             corruption_probability=meta["corruption_probability"],
             manifest=manifest,
             removed_concepts=removed_concepts,
-            corruption_channels=meta.get("corruption_channels"),
         )
         datasets.append(dataset)
 
     trainset, valset, testset = datasets
     sync_num_concepts(config, trainset, log_file=log_file)
     sync_num_classes(config, trainset, log_file=log_file)
-    sync_num_covariates(config, trainset, log_file=log_file)
 
     message = f"Loaded MNIST-Add-Cov splits from {data_dir_name}"
     if removed_concepts:
@@ -1473,128 +1051,76 @@ def log_split_fingerprints(
     return fingerprints
 
 
-def get_mnist_add_cov_concept_names(experiment: str = "original") -> List[str]:
-    return experiment_concept_names(experiment)
+def get_mnist_add_cov_concept_names() -> List[str]:
+    return OBSERVED_CONCEPT_NAMES.copy()
 
 
-def get_mnist_add_cov_oracle_names(experiment: str = "original") -> List[str]:
-    return list(get_experiment_spec(experiment)["oracle_names"])
+def get_mnist_add_cov_oracle_names() -> List[str]:
+    return ORACLE_NAMES.copy()
 
 
 def summarize_dataset(dataset: MNISTAddCovDataset) -> None:
-    """
-    Diagnostic checks for the selected experiment.
-
-    For the four-digit experiments this is the sanity check to run *before*
-    training: it prints the marginal concept-X correlations the whole covariance
-    argument rests on, and confirms X is not determined by the exposed concepts
-    (if it were, a linear head would compute X directly and the residual would
-    stay empty).
-    """
+    """Diagnostic checks for the selected experiment."""
     concepts = dataset.observed_concepts
     hidden = dataset.hidden_concepts
     labels = dataset.task_labels
-    names = [n.split("::")[0] for n in dataset.observed_concept_names]
 
     print(f"N={len(dataset)}")
     print(f"Experiment: {dataset.experiment}")
-    print(f"Digit channels: {dataset.num_digits}")
     print(f"Concepts exposed: {dataset.concept_names()}")
-    print(f"Observed concept means {names}: {concepts.mean(axis=0)}")
+    print(f"Observed concept means [A1,H1,H2]: {concepts.mean(axis=0)}")
     print(f"Oracle means [A2,X]: {hidden.mean(axis=0)}")
-    print(
-        f"Task class counts: "
-        f"{np.bincount(labels, minlength=dataset.num_classes)}"
-    )
 
-    x = hidden[:, 1]
+    num_classes = 2 if dataset.experiment == "hidden_xor" else 8
+    print(f"Task class counts: {np.bincount(labels, minlength=num_classes)}")
 
     if dataset.experiment == "hidden_xor":
-        h1, h2 = concepts[:, 1], concepts[:, 2]
-        print(f"Corr(H1, X): {np.corrcoef(h1, x)[0, 1]:+.4f}")
-        print(f"Corr(H2, X): {np.corrcoef(h2, x)[0, 1]:+.4f}")
-        print(
-            "  ^ both near zero BY CONSTRUCTION: parity is pairwise "
-            "independent of its parents, so the marginal cross-block carries "
-            "no signal here. Analyse this one conditionally instead."
-        )
-        for h1_value in (0, 1):
-            for h2_value in (0, 1):
+        h1 = concepts[:, 1]
+        h2 = concepts[:, 2]
+        x = hidden[:, 1]
+
+        print(f"Corr(H1, X): {np.corrcoef(h1, x)[0, 1]:.4f}")
+        print(f"Corr(H2, X): {np.corrcoef(h2, x)[0, 1]:.4f}")
+
+        for h1_value in [0, 1]:
+            for h2_value in [0, 1]:
                 mask = (h1 == h1_value) & (h2 == h2_value)
                 print(
                     f"H1={h1_value}, H2={h2_value}: "
                     f"n={mask.sum()}, P(X=1)={x[mask].mean():.4f}"
                 )
-        return
-
-    if dataset.num_digits == 4:
-        print("Marginal concept-X correlations (the covariance target):")
-        for j, name in enumerate(names):
-            print(f"  Corr({name}, X) = {np.corrcoef(concepts[:, j], x)[0, 1]:+.4f}")
-
-        print("Is X determined by the exposed concepts?")
-        determined = 0
-        for a_value in (0, 1):
-            for b_value in (0, 1):
-                mask = (concepts[:, 0] == a_value) & (concepts[:, 1] == b_value)
-                if mask.sum() == 0:
-                    continue
-                p = x[mask].mean()
-                flag = "  <- determined" if p in (0.0, 1.0) else ""
-                determined += mask.sum() if p in (0.0, 1.0) else 0
-                print(
-                    f"  A={a_value}, B={b_value}: n={mask.sum()}, "
-                    f"P(X=1)={p:.4f}{flag}"
-                )
-        frac = determined / len(dataset)
-        print(
-            f"  X is pinned by (A,B) on {frac:.1%} of samples; the residual is "
-            f"strictly required on the remaining {1 - frac:.1%}."
-        )
-        return
-
-    a2, h2 = hidden[:, 0], concepts[:, 2]
-    for h2_value in (0, 1):
-        mask = h2 == h2_value
-        print(f"P(A2=1 | H2={h2_value}) = {a2[mask].mean():.4f}  (target 0.5)")
+    else:
+        a2 = hidden[:, 0]
+        h2 = concepts[:, 2]
+        for h2_value in [0, 1]:
+            mask = h2 == h2_value
+            print(
+                f"P(A2=1 | H2={h2_value}) = "
+                f"{a2[mask].mean():.4f}  (target 0.5)"
+            )
 
 
 if __name__ == "__main__":
-    # Small standalone smoke test over every registered experiment.
-    import sys
-
+    # Small standalone smoke test.
     class Config:
         data_path = "./data"
-        train_dataset_size = 2000
-        val_dataset_size = 400
-        test_dataset_size = 2000
+        train_dataset_size = 1000
+        val_dataset_size = 200
+        test_dataset_size = 1000
         val_percent = 0.2
 
-        experiment = "hidden_carry"
+        experiment = "hidden_xor"
         planted_function = "xor"
 
         corruption = "none"
         corruption_strength = 0.0
         corruption_probability = 1.0
 
-    requested = sys.argv[1:] or sorted(EXPERIMENT_SPECS)
+    trainset, valset, testset = get_MNIST_add_cov_datasets(Config(), seed=42)
+    summarize_dataset(trainset)
 
-    for name in requested:
-        config = Config()
-        config.experiment = name
-
-        print("\n" + "=" * 70)
-        trainset, valset, testset = get_MNIST_add_cov_datasets(config, seed=42)
-        summarize_dataset(trainset)
-
-        sample = trainset[0]
-        print("features:", tuple(sample["features"].shape))
-        print("concepts:", sample["concepts"].tolist())
-        print("hidden_concepts [A2,X]:", sample["hidden_concepts"].tolist())
-        print("digit_labels:", sample["digit_labels"].tolist())
-        print("label:", int(sample["labels"]))
-        print(
-            f"synced config: num_concepts={config.num_concepts}, "
-            f"num_classes={config.num_classes}, "
-            f"num_covariates={config.num_covariates}"
-        )
+    sample = trainset[0]
+    print("features:", sample["features"].shape)
+    print("concepts:", sample["concepts"])
+    print("hidden_concepts [A2,X]:", sample["hidden_concepts"])
+    print("label:", sample["labels"])

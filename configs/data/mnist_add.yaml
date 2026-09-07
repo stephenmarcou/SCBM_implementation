@@ -7,12 +7,62 @@ defaults:
 dataset: 'MNIST-Add-Cov'  # Must match the dataset name used in utils/data.py
 
 # --------------------------
+#    Experiment selector
+# --------------------------
+# 'original':          2 digits
+#   concepts = [A1, H1, H2]
+#   X = planted_function(A1, A2)
+#   y = 4*A1 + 2*(H1 OR H2) + X                       (8 classes)
+#
+# 'hidden_xor':        2 digits
+#   concepts = [H1, H2]                               (A1 automatically withheld)
+#   X = H1 XOR H2
+#   y = X                                             (binary)
+#   NOTE: corr(H1,X) = corr(H2,X) = 0 by construction. Parity is pairwise
+#   independent of its parents, so the MARGINAL cross-block covariance is
+#   uninformative here whatever the residual learns. Keep this one as the
+#   acknowledged hard case and analyse it conditionally (stratify the
+#   per-sample cross-covariance by the other concept and look for the sign
+#   flip; never average, the flip cancels to zero).
+#
+# 'hidden_carry':      4 digits   <-- primary covariance experiment
+#   concepts = [A, B, D1, D2] = [d1>=5, d2>=5, d3>=5, d4>=5]
+#   X = 1[d1 + d2 >= 10]                              (the addition carry)
+#   y = 4*A + 2*B + X                                 (8 encodings, 6 reachable)
+#   corr(A,X) = corr(B,X) = +0.50 ; corr(D1,X) = corr(D2,X) = 0 exactly.
+#   X is not a function of (A,B) on the 50% of samples where A != B, so a
+#   linear head cannot shortcut it and must route X through the residual.
+#
+# 'hidden_diff':       4 digits   signed variant
+#   X = 1[d1 - d2 >= 2]  ->  corr(A,X) = +0.50, corr(B,X) = -0.50
+#   The cross-block has to recover direction, not just membership.
+#
+# 'hidden_carry_swap': 4 digits   specificity control
+#   X = 1[d3 + d4 >= 10] (carry over the DISTRACTOR digits), y = 4*A + 2*B + X
+#   Residual still required, but should now correlate with D1/D2, not A/B.
+#
+# 'hidden_carry_null': 4 digits   calibration run
+#   y = 2*A + B (4 classes); X recorded as oracle but absent from the target.
+#   Residual has no job -> every cross-block entry should go flat. This is what
+#   tells you how big a "big" entry is.
+#
+# The loader rewrites num_concepts, num_classes and num_covariates to match the
+# selected experiment, so the values below are documentation, not a contract.
+experiment: 'hidden_carry'
+
+# --------------------------
 #      Dataset dimensions
 # --------------------------
-num_classes: 8       # y = 4*A1 + 2*M + X, so labels are in {0, ..., 7}
-num_concepts: 3      # Observed concepts: [A1, H1, H2]
-num_residuals: 1     # Start with R=1 for the controlled mechanism experiment
-num_covariates: 2    # Two MNIST digits stacked as channels -> [2, 28, 28]
+#   original            -> num_classes=8, num_concepts=3, num_covariates=2
+#   hidden_xor          -> num_classes=2, num_concepts=2, num_covariates=2
+#   hidden_carry        -> num_classes=8, num_concepts=4, num_covariates=4
+#   hidden_diff         -> num_classes=8, num_concepts=4, num_covariates=4
+#   hidden_carry_swap   -> num_classes=8, num_concepts=4, num_covariates=4
+#   hidden_carry_null   -> num_classes=4, num_concepts=4, num_covariates=4
+num_classes: 8
+num_concepts: 4
+num_residuals: 1     # Start with R=1; go to R=5 only after R=1 works
+num_covariates: 4    # Four MNIST digits stacked as channels -> [4, 28, 28]
 
 # --------------------------
 #       Dataset sizes
@@ -38,7 +88,8 @@ data_seed: null
 # then reuse it everywhere (copy the folder to the cluster) with:
 #   data.data_dir_name=<name>
 # A loaded split is taken verbatim from disk, so it no longer depends on the run
-# seed or on numpy/torch versions.
+# seed or on numpy/torch versions. Splits are experiment-specific: a saved
+# 'original' split is rejected if the YAML asks for a hidden_* experiment.
 save_data: false
 save_data_name: null   # folder name to save under; null -> auto-named from the settings
 data_dir_name: null    # folder name to load from; null -> generate on the fly
@@ -46,45 +97,55 @@ data_dir_name: null    # folder name to load from; null -> generate on the fly
 # --------------------------
 #     Incomplete variants
 # --------------------------
-# Observed concepts withheld from the bottleneck, by index (0=A1, 1=H1, 2=H2)
-# or by name ('A1', 'H1::digit1_ge_6', ...). The split is unchanged -- same
-# samples, same order, same task labels -- so a run with removed concepts stays
-# row-aligned with the complete run. Removed columns stay available for analysis
-# under the batch key 'removed_concepts', and `num_concepts` is rewritten from
-# the data.
+# Additional observed concepts to withhold. Each experiment protects the
+# concepts it is defined around and rejects an attempt to remove them:
+#   hidden_xor         protects H1, H2 (and hides A1 automatically)
+#   hidden_carry/diff  protect A, B    (D1/D2 may be removed)
+#   hidden_carry_swap  protects all four
 removed_concepts: []
-
-
 
 # --------------------------
 #   Planted hidden function
 # --------------------------
-# Supported options:
-#   xor
-#   and
-#   or
-#   a2
+# Used by experiment='original' only. Options: xor, and, or, a2.
+# The hidden_* experiments define X themselves and ignore this.
 planted_function: 'xor'
 
 # --------------------------
 #       Image corruption
 # --------------------------
-# Start with a clean sanity-check run.
-# For the covariance experiment, override these values, for example:
-#   corruption: 'gaussian'
-#   corruption_strength: 0.2
-corruption: 'none'
-corruption_strength: 0.0
+# This is not cosmetic. Sigma is predicted FROM the image, so it measures how
+# concept uncertainty co-varies with residual uncertainty *given that image*. On
+# clean MNIST the model reads every concept off perfectly, the Sigma diagonal
+# collapses toward zero, and the cross-block entry you want to plot becomes a
+# 0/0 ratio carrying no information.
+#
+# What you need is uncertainty spanning SEVERAL digit identities, not just an
+# adjacent pair: A = 1[d1>=5] and X = 1[d1+d2>=10] flip at different thresholds,
+# so a posterior torn between only 4 and 5 leaves X certain while A wobbles and
+# the two never couple. Under a broad posterior over d1 both are monotone in the
+# same latent digit and the cross-block populates. Aim for concept accuracy
+# nearer 85% than 95%, and check Sigma[A,A] is comfortably above zero before
+# reading anything off the cross-block.
+corruption: 'gaussian'
+corruption_strength: 0.5
 corruption_probability: 1.0
 
+# Which digit channels get corrupted: 'first', 'all', or an explicit list.
+# null -> the experiment default ('first' for the 2-digit experiments, 'all' for
+# the 4-digit ones). Keep 'all' for the carry family: if only the parents were
+# corrupted, "A and B light up, D1 and D2 stay flat" would be an artifact of who
+# got corrupted rather than a fact about the residual.
+corruption_channels: null
+
 # Test corruption can be controlled separately.
-test_corruption: 'none'
-test_corruption_strength: 0.0
+test_corruption: 'gaussian'
+test_corruption_strength: 0.5
 test_corruption_probability: 1.0
 
 # --------------------------
 #       Saving outputs
 # --------------------------
-save_predicted_concepts_residuals: false
-save_residual_channel: false
-save_concept_and_residual_channel: false
+save_predicted_concepts_residuals: true
+save_residual_channel: true
+save_concept_and_residual_channel: true
