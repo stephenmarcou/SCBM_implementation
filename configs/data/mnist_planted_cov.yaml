@@ -1,0 +1,134 @@
+# --------------------------
+#         Dataset
+# --------------------------
+# Config for datasets/MNIST_add_cov_dataset.py's MNIST-Planted-Cov generator
+# (MNISTPlantedCovDataset / get_MNIST_planted_cov_datasets). Every key below is
+# one that module actually reads via _cfg_get -- nothing here is inherited
+# from the old six-experiment mnist_add.yaml design (original / hidden_xor /
+# hidden_carry / hidden_diff / hidden_carry_swap / hidden_carry_null), which
+# that module no longer implements.
+defaults:
+  - data_defaults  # Inherit data_defaults arguments (data_path, incomplete_dir)
+
+dataset: 'MNIST-Add-Cov'  # Must match the dataset name used in utils/data.py
+
+# --------------------------
+#    Experiment selector
+# --------------------------
+# input     five MNIST digits stacked as channels -> [num_covariates, 28, 28]
+# concepts  A = 1[d1>=5], B = 1[d2>=5], D1 = 1[d3>=5], D2 = 1[d4>=5]   (all supervised)
+# hidden    X = 1[d5>=5]                                              (never supervised)
+# target    y = 4*A + 2*B + X                                         (8 classes)
+#
+# 'planted_parents'   P(X=1|A,B)   = 0.5 + kappa/2 * (A + B - 1)
+#                        corr(A,X) = corr(B,X) = +kappa/2 ; corr(D1,X) = corr(D2,X) = 0
+# 'planted_swap'      P(X=1|D1,D2) = 0.5 + kappa/2 * (D1 + D2 - 1)
+#                        mirror image: D1/D2 become the parents, A/B the null channels.
+#                        y is still 4*A + 2*B + X, so this rules out "the cross-block
+#                        just tracks whichever concepts drive the target".
+# 'planted_diff'      P(X=1|A,B)   = 0.5 + kappa/2 * (A - B)
+#                        corr(A,X) = +kappa/2, corr(B,X) = -kappa/2 -- tests whether the
+#                        cross-block recovers sign, not just membership.
+#
+# Aliases accepted by the loader: 'parents' -> planted_parents, 'swap' -> planted_swap,
+# 'diff' -> planted_diff. There is no separate null-control experiment: kappa=0 is the null.
+experiment: 'planted_parents'
+
+# Strength of the planted dependence, in [0, 1]. kappa=0: X independent of every concept
+# (every cross-block entry should sit at the noise floor). Sweep {0, 0.3, 0.6, 0.9} for a
+# dose-response curve.
+#   corr(parent, X)           = kappa / 2
+#   concept-only task ceiling = 0.5 + kappa/4   (0.5 under planted_swap, since A/B carry
+#                                                 no information about X there)
+#   residual headroom         = 0.5 - kappa/4
+kappa: 0.9
+
+# Not read by MNIST_add_cov_dataset.py -- train.py's run-folder naming for dataset ==
+# "MNIST-Add-Cov" still does f"planted_{config.data.planted_function}_" (written for the
+# old experiment design and never updated for this module). Mirrors `experiment` so the
+# folder name stays meaningful without a second value to keep in sync by hand.
+planted_function: ${data.experiment}
+
+# --------------------------
+#      Dataset dimensions
+# --------------------------
+# Fixed by the generator, not a free choice: 4 concepts (A, B, D1, D2), 8 task classes.
+# The loader rewrites these to match the actual generated split (fewer if
+# removed_concepts is non-empty), so these values are documentation, not a contract.
+num_classes: 8
+num_concepts: 4
+num_residuals: 1     # Start with R=1; go to R=5 only after R=1 works
+
+# Digit images stacked as channels: the input is [num_covariates, 28, 28] and the
+# encoder's first conv is built with in_channels=num_covariates. Minimum is 5 (d1..d4 for
+# the concepts, d5 for the hidden X); anything above that is pure distractor padding
+# channels that no concept, oracle or label depends on.
+num_covariates: 5
+
+# --------------------------
+#       Dataset sizes
+# --------------------------
+train_dataset_size: 12000
+val_dataset_size: 2400
+test_dataset_size: 10000
+val_percent: 0.2
+
+# Seed for the train/val/test split itself. Leave null to follow the run seed
+# (`seed` in configs/config.yaml); set it to pin the exact same samples across runs and
+# machines while still varying the training seed.
+data_seed: null
+
+# --------------------------
+#   Materialised splits
+# --------------------------
+# Generate the split once and write it to
+# <data_path>/MNIST_ADD_COV/splits/<name>/{train,val,test}/ :
+#   python train.py +data=mnist_planted_cov +model=SCBM_RES data.save_data=True
+# then reuse it everywhere (copy the folder to the cluster) with:
+#   data.data_dir_name=<name>
+# A loaded split is taken verbatim from disk (digit identities, source MNIST images,
+# concept/task labels), so it no longer depends on the run seed. Corrupted pixels are
+# NOT stored -- they are redrawn deterministically from `seed` at __getitem__ time, so a
+# loaded split still needs the same MNIST raw files under data_path, which
+# get_MNIST_planted_cov_datasets downloads on first use.
+save_data: false
+save_data_name: null   # folder name to save under; null -> auto-named from the settings
+data_dir_name: null    # folder name to load from; null -> generate on the fly
+
+# --------------------------
+#     Incomplete variants
+# --------------------------
+# Concept indices to withhold from the bottleneck: 0=A, 1=B, 2=D1, 3=D2. Removal is
+# applied at load time on top of the generated/loaded split, so it does not change which
+# samples are drawn -- only which of the 4 concepts are exposed to the model.
+removed_concepts: []
+
+# --------------------------
+#       Image corruption
+# --------------------------
+# Two independent knobs, and both matter for a different reason.
+#
+# corruption_strength corrupts channel 5 (X's digit) only. X must NOT be perfectly
+# readable from d5 -- if it were, the concepts would add nothing on top of the image and
+# the optimal cross-block would be zero. Tune so a residual-only probe of X lands around
+# 0.80-0.85 accuracy.
+corruption: 'gaussian'   # none | gaussian | blur | occlusion
+corruption_strength: 0.5
+
+# concept_corruption_strength corrupts channels 1-4 (A, B, D1, D2), all four on the same
+# terms so parents and distractors stay comparable. Mild is right here -- aim for
+# ~0.93-0.95 concept accuracy; too much reopens memorisation / copy-a-concept failure
+# modes. Defaults to 0.0 (clean concept channels) if left unset.
+concept_corruption: null                  # null -> defaults to `corruption`
+concept_corruption_strength: 0.0
+
+# Test-time corruption; both default to the training values above if left null.
+test_corruption_strength: null
+test_concept_corruption_strength: null
+
+# --------------------------
+#       Saving outputs
+# --------------------------
+save_predicted_concepts_residuals: true
+save_residual_channel: true
+save_concept_and_residual_channel: true
