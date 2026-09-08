@@ -17,6 +17,7 @@ from utils.utils import reset_random_seeds
 from datasets.cifar100_dataset_stephen import get_CIFAR100_CBM_dataloader
 from datasets.CUB_dataset import CUB_FAMILY_DATASETS, get_CUB_dataloaders
 from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
+from datasets.awa2_dataset import get_AWA2_dataloaders
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data
 
 from sklearn.metrics import roc_auc_score
@@ -72,7 +73,7 @@ class CIFAR100_CBM_dataloader(datasets.CIFAR100):
 
 def choose_predictor(model_type, num_concepts, num_classes):
     # Final target predictor head 
-    if model_type == "linear":
+    if model_type == "linear_head":
         fc_y = nn.Linear(num_concepts, num_classes)
         head = nn.Sequential(fc_y)
     else:
@@ -265,7 +266,14 @@ def get_dataloaders(config, gen):
         train_data, val_data, test_data = get_Waterbirds_dataloaders(
             config.data, config.incomplete
         )
-        
+
+    elif dataset == "AwA2":
+        print("AwA2 DATASET")
+
+        train_data, val_data, test_data = get_AWA2_dataloaders(
+            config.data, config.incomplete
+        )
+
     elif dataset == "synthetic_res_scbm":
         if config.data.data_dir_name is not None:
             train_data, val_data, test_data = load_saved_synthetic_data(config)
@@ -300,7 +308,7 @@ def train(config):
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
     ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
     if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic" and config.data.dataset != "multilabel_synthetic":
-        pkl_file_dir = config.data.pkl_file_dir.strip("/")  
+        pkl_file_dir = config.data.pkl_file_dir.strip("/") if config.data.pkl_file_dir else "complete"
         ex_name = pkl_file_dir + "_" + ex_name
 
     # Create experiment directory

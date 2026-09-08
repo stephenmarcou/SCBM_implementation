@@ -695,6 +695,23 @@ def check_mnist_add_data(config):
         config.model.encoder_arch = "mnist_encoder"
 
 
+def check_awa2_encoder(config):
+    """Point AwA2 at its default embedding encoder.
+
+    encoder_arch lives in the model group, so configs/data/AwA2.yaml cannot set it and
+    every +model=... default would otherwise build a resnet18 image encoder for AwA2's
+    precomputed ResNet-101 embeddings. Only the global default is overridden - an
+    explicitly chosen architecture is left alone.
+
+    Like the other check_* functions this runs before train() writes the config to the
+    first line of log.txt, so the logged encoder_arch is the one the model was built
+    with, which is what inference.py reads it back out of.
+    """
+    if config.model.encoder_arch == "resnet18":
+        print("AwA2 run: setting model.encoder_arch to 'resnet101_embeddings'")
+        config.model.encoder_arch = "resnet101_embeddings"
+
+
 def check_synthetic_res_scbm_data(config):
     if config.data.data_dir_name is not None:
         train_data, _, _ = load_saved_synthetic_data(config)
@@ -758,6 +775,8 @@ def main(config: DictConfig):
         check_Waterbirds_data(config)
     if config.data.dataset == "MNIST-Add-Cov":
         check_mnist_add_data(config)
+    if config.data.dataset == "AwA2":
+        check_awa2_encoder(config)
     if config.data.dataset == "synthetic_res_scbm":
         check_synthetic_res_scbm_data(config)
     

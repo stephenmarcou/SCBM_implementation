@@ -1,12 +1,10 @@
 """
 AwA2 dataset loader with concept labels, designed to match the interface of the
-CUB loader used in this codebase.
+CUB loader used in this codebase while preserving the AwA2 preprocessing used
+in the CEM/ECBM data loader.
 
-This version uses the precomputed Xian et al. ResNet-101 embeddings stored in
-xlsa17/data/AWA2/res101.mat instead of loading and transforming JPEG pixels.
-
-Expected AwA2 structure
------------------------
+Expected raw AwA2 structure
+---------------------------
 <data_path>/AwA2/
     classes.txt
     predicate-matrix-binary.txt
@@ -14,22 +12,16 @@ Expected AwA2 structure
         antelope/
         grizzly+bear/
         ...
-    xlsa17/
-        data/
-            AWA2/
-                res101.mat
 
-Split behaviour
----------------
+CEM-compatible behaviour
+------------------------
 1. 50-way supervised image classification.
 2. 85 binary, class-level attributes from predicate-matrix-binary.txt.
-3. The existing CEM-style random image-level train/val/test split is preserved
-   exactly (60% / 20% / 20%, seed 42 when first created).
-4. train_split.npz / val_split.npz / test_split.npz still define split
-   membership by image path. Each image path is matched to the corresponding
-   row in res101.mat and the returned "features" tensor is the 2048-D
-   precomputed ResNet-101 embedding.
-5. The original xlsa17 zero-shot train/test split is NOT used.
+3. Random image-level train/val/test split: 60% / 20% / 20%, seed 42.
+4. CEM AwA2 image preprocessing:
+   - no augmentation: Resize(256/224 * image_size) -> CenterCrop(image_size)
+   - augmentation: RandomResizedCrop + RandomHorizontalFlip
+   - ImageNet normalization in both cases.
 
 Incomplete concept datasets
 ---------------------------
@@ -50,7 +42,6 @@ from collections import OrderedDict
 import numpy as np
 import torch
 from PIL import Image
-from scipy import io
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
@@ -259,149 +250,6 @@ def _resolve_saved_image_path(saved_path, root_dir):
     return saved_path
 
 
-def _get_res101_path(config_data):
-    """
-    Return the path to Xian et al.'s precomputed AwA2 ResNet-101 features.
-
-    Default:
-        <config.data_path>/AwA2/xlsa17/data/AWA2/res101.mat
-
-    An explicit config.res101_path or config.resnet_101_path overrides the
-    default, if present.
-    """
-    explicit_path = getattr(config_data, "res101_path", None)
-    if not explicit_path:
-        explicit_path = getattr(config_data, "resnet_101_path", None)
-
-    if explicit_path:
-        return str(explicit_path)
-
-    return os.path.join(
-        _get_awa2_root(config_data),
-        "xlsa17",
-        "data",
-        "AWA2",
-        "res101.mat",
-    )
-
-
-def _matlab_string(value):
-    """Convert scipy.loadmat's MATLAB string representation to a Python str."""
-    while isinstance(value, np.ndarray):
-        if value.dtype.kind in {"U", "S"}:
-            return "".join(value.astype(str).ravel().tolist())
-        if value.size == 1:
-            value = value.item()
-        else:
-            # This should not normally be needed for xlsa17 image_files, but
-            # gives a readable fallback for MATLAB character arrays.
-            return "".join(str(x) for x in value.ravel().tolist())
-
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-
-    return str(value)
-
-
-def _normalize_awa2_image_key(path):
-    """
-    Convert an AwA2 image path to a machine-independent key.
-
-    Both the saved split files and res101.mat may contain absolute paths from
-    different machines. We therefore match using the path relative to
-    JPEGImages, e.g.:
-        antelope/antelope_10001.jpg
-
-    If JPEGImages is not present in the stored path, the final
-    <class>/<filename> components are used.
-    """
-    normalized = _matlab_string(path).replace("\\", "/").strip()
-
-    marker = "/JPEGImages/"
-    if marker in normalized:
-        return normalized.split(marker, 1)[1]
-
-    if normalized.startswith("JPEGImages/"):
-        return normalized[len("JPEGImages/"):]
-
-    parts = [part for part in normalized.split("/") if part]
-    if len(parts) >= 2:
-        return "/".join(parts[-2:])
-    if parts:
-        return parts[-1]
-
-    raise ValueError(f"Could not normalize empty AwA2 image path: {path!r}")
-
-
-def _load_res101_embeddings(config_data):
-    """
-    Load Xian et al.'s precomputed ResNet-101 embeddings.
-
-    Returns
-    -------
-    features : np.ndarray, shape [N, D]
-        Usually [37322, 2048].
-    labels : np.ndarray, shape [N]
-        0-based class labels from res101.mat.
-    image_to_index : dict[str, int]
-        Maps normalized <class>/<filename> image keys to embedding rows.
-    """
-    res101_path = _get_res101_path(config_data)
-
-    if not os.path.exists(res101_path):
-        raise FileNotFoundError(
-            "Could not find AwA2 ResNet-101 embeddings at:\n"
-            f"  {res101_path}\n"
-            "Expected default location: "
-            "<data_path>/AwA2/xlsa17/data/AWA2/res101.mat"
-        )
-
-    mat = io.loadmat(res101_path)
-
-    required_keys = {"features", "labels", "image_files"}
-    missing_keys = required_keys.difference(mat.keys())
-    if missing_keys:
-        raise KeyError(
-            f"{res101_path} is missing required keys: {sorted(missing_keys)}. "
-            f"Available keys: {sorted(k for k in mat.keys() if not k.startswith('__'))}"
-        )
-
-    # xlsa17 stores features as [feature_dim, n_images], so transpose to
-    # [n_images, feature_dim].
-    features = np.asarray(mat["features"], dtype=np.float32).T
-    labels = np.asarray(mat["labels"]).squeeze().astype(np.int64) - 1
-    image_files = np.asarray(mat["image_files"]).squeeze()
-
-    if features.shape[0] != labels.shape[0]:
-        raise ValueError(
-            f"Feature/label count mismatch in {res101_path}: "
-            f"{features.shape[0]} features vs {labels.shape[0]} labels."
-        )
-
-    if len(image_files) != features.shape[0]:
-        raise ValueError(
-            f"Feature/image_files count mismatch in {res101_path}: "
-            f"{features.shape[0]} features vs {len(image_files)} image paths."
-        )
-
-    image_to_index = {}
-    for idx, raw_path in enumerate(image_files):
-        key = _normalize_awa2_image_key(raw_path)
-        if key in image_to_index:
-            raise ValueError(
-                f"Duplicate normalized image key in res101.mat: {key}"
-            )
-        image_to_index[key] = idx
-
-    print(
-        "Loaded AwA2 ResNet-101 embeddings: "
-        f"features={features.shape}, labels={labels.shape}, "
-        f"image_paths={len(image_to_index)}"
-    )
-
-    return features, labels, image_to_index
-
-
 # -----------------------------------------------------------------------------
 # Dataset and CEM-compatible splits
 # -----------------------------------------------------------------------------
@@ -411,69 +259,31 @@ class AWA2_DatasetGenerator(Dataset):
     AwA2 Dataset object with the same sample dictionary interface as the CUB
     loader in this codebase.
 
-    Split membership still comes from the existing saved image-path split.
-    Instead of opening the JPEG, each image path is matched to its precomputed
-    ResNet-101 embedding in res101.mat.
-
     Each image gets the class-level binary attribute vector corresponding to
     its class in predicate-matrix-binary.txt.
     """
 
-    def __init__(
-        self,
-        data,
-        predicate_binary_mat,
-        embeddings,
-        embedding_labels,
-        image_to_embedding_index,
-    ):
+    def __init__(self, data, predicate_binary_mat, transform=None):
         self.data = data
-        self.predicate_binary_mat = np.asarray(
-            predicate_binary_mat,
-            dtype=np.float32,
-        )
-        self.embeddings = embeddings
-        self.embedding_labels = embedding_labels
-        self.image_to_embedding_index = image_to_embedding_index
+        self.predicate_binary_mat = np.asarray(predicate_binary_mat, dtype=np.float32)
+        self.transform = transform
 
     def __getitem__(self, index):
         sample = self.data[index]
         img_path = sample["img_path"]
         image_label = int(sample["class_label"])
 
-        # Preserve the exact image membership of train_split.npz /
-        # val_split.npz / test_split.npz, but replace the JPEG pixels with the
-        # matching precomputed ResNet-101 feature vector.
-        image_key = _normalize_awa2_image_key(img_path)
-
-        if image_key not in self.image_to_embedding_index:
-            raise KeyError(
-                "Could not find a ResNet-101 embedding for AwA2 image:\n"
-                f"  path: {img_path}\n"
-                f"  normalized key: {image_key}"
-            )
-
-        embedding_idx = self.image_to_embedding_index[image_key]
-        embedding_label = int(self.embedding_labels[embedding_idx])
-
-        # Catch any disagreement between classes.txt / saved split labels and
-        # the xlsa17 res101.mat label ordering instead of silently training on
-        # mismatched labels.
-        if embedding_label != image_label:
-            raise ValueError(
-                f"AwA2 label mismatch for {image_key}: "
-                f"saved split label={image_label}, "
-                f"res101.mat label={embedding_label}."
-            )
-
-        image_features = torch.from_numpy(self.embeddings[embedding_idx])
+        image_data = Image.open(img_path).convert("RGB")
         image_attr = self.predicate_binary_mat[image_label, :].astype(np.float32)
+
+        if self.transform is not None:
+            image_data = self.transform(image_data)
 
         # Same dictionary keys used by CUB_DatasetGenerator.
         return {
             "img_code": index,
             "labels": image_label,
-            "features": image_features,
+            "features": image_data,
             "concepts": image_attr,
         }
 
@@ -651,53 +461,38 @@ def get_AWA2_transforms(image_size=224, augment_data=False):
 
 def get_AWA2_dataloaders(config, incomplete=False):
     """
-    Return train/val/test Dataset objects using precomputed ResNet-101 features.
-
-    The existing train_split.npz / val_split.npz / test_split.npz files are
-    reused unchanged, so this preserves exactly the same image-level
-    train/validation/test membership as the previous JPEG-based loader.
+    Return train/val/test Dataset objects, matching the interface of
+    get_CUB_dataloaders in this codebase.
 
     Despite the historical function name, this returns Dataset objects rather
     than torch DataLoader objects, just like the attached CUB implementation.
     """
     seed = getattr(config, "seed", DEFAULT_SEED)
+    image_size = getattr(config, "image_size", 224)
+    augment_data = getattr(config, "augment_data", False)
 
-    # IMPORTANT: this is the same saved 60/20/20 split used before.
-    train_imgs, val_imgs, test_imgs = train_val_test_split_AWA2(
-        config,
-        seed=seed,
-    )
-
-    predicate_binary_mat = _load_predicate_matrix(
-        config,
-        incomplete=incomplete,
-    )
-
-    embeddings, embedding_labels, image_to_embedding_index = (
-        _load_res101_embeddings(config)
+    train_imgs, val_imgs, test_imgs = train_val_test_split_AWA2(config, seed=seed)
+    predicate_binary_mat = _load_predicate_matrix(config, incomplete=incomplete)
+    train_transform, test_transform = get_AWA2_transforms(
+        image_size=image_size,
+        augment_data=augment_data,
     )
 
     image_datasets = {
         "train": AWA2_DatasetGenerator(
             train_imgs,
             predicate_binary_mat,
-            embeddings,
-            embedding_labels,
-            image_to_embedding_index,
+            transform=train_transform,
         ),
         "val": AWA2_DatasetGenerator(
             val_imgs,
             predicate_binary_mat,
-            embeddings,
-            embedding_labels,
-            image_to_embedding_index,
+            transform=test_transform,
         ),
         "test": AWA2_DatasetGenerator(
             test_imgs,
             predicate_binary_mat,
-            embeddings,
-            embedding_labels,
-            image_to_embedding_index,
+            transform=test_transform,
         ),
     }
 

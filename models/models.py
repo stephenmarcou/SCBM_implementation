@@ -54,50 +54,45 @@ def create_model(config):
         
 
 
+
 class IntCEMMNISTEncoder(nn.Module):
     """
-    IntCEM-style MNIST encoder.
-
-    5 convolutional layers:
-        - 16 filters
-        - 3x3 kernels
-        - BatchNorm
-        - LeakyReLU
-
-    Followed by a linear projection to 128 features.
+    IntCEM-style MNIST encoder, matching the reference implementation
+    (get_mnist_extractor_arch): 4 conv blocks with pooling, so the
+    28x28 map reduces 28 -> 14 -> 7 -> 3 -> 1 before the projection.
     """
 
     def __init__(self, in_channels=2, output_dim=128):
         super().__init__()
+        m = 16
 
         self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(in_channels, m, kernel_size=3, padding="same"),
+            nn.BatchNorm2d(m),
+            nn.LeakyReLU(),
+            nn.MaxPool2d((2, 2)),                       # 28 -> 14
+
+            nn.Conv2d(m, m, kernel_size=3, padding="same"),
+            nn.MaxPool2d((2, 2)),                       # 14 -> 7
+            nn.BatchNorm2d(m),
             nn.LeakyReLU(),
 
-            nn.Conv2d(16, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(m, m, kernel_size=3, padding="same"),
+            nn.BatchNorm2d(m),
             nn.LeakyReLU(),
+            nn.MaxPool2d((2, 2)),                       # 7 -> 3
 
-            nn.Conv2d(16, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(m, m, kernel_size=3, padding="same"),
+            nn.BatchNorm2d(m),
             nn.LeakyReLU(),
-
-            nn.Conv2d(16, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(),
-
-            nn.Conv2d(16, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(),
+            nn.MaxPool2d((3, 3)),                       # 3 -> 1
 
             nn.Flatten(),
-            nn.Linear(16 * 28 * 28, output_dim),
+            nn.Linear(m * 1 * 1, output_dim),
         )
 
     def forward(self, x):
         return self.encoder(x)
-
 
 
 
@@ -203,6 +198,11 @@ class SCBM(nn.Module):
         elif self.encoder_arch == "mnist_encoder":
             n_features = 128
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
+            
+            
+        elif self.encoder_arch == "resnet101_embeddings":
+            n_features = 2048
+            self.encoder = nn.Identity()
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
@@ -546,6 +546,11 @@ class SCBM_residual(nn.Module):
         elif self.encoder_arch == "mnist_encoder":
             n_features = 128
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
+            
+            
+        elif self.encoder_arch == "resnet101_embeddings":
+            n_features = 2048
+            self.encoder = nn.Identity()
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
@@ -1054,6 +1059,10 @@ class CBM(nn.Module):
         elif self.encoder_arch == "mnist_encoder":
             n_features = 128
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
+            
+        elif self.encoder_arch == "resnet101_embeddings":
+            n_features = 2048
+            self.encoder = nn.Identity()
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
@@ -1627,6 +1636,10 @@ class CBMResidual(nn.Module):
                 in_channels=config.data.num_covariates,
                 output_dim=n_features,
             )
+            
+        elif self.encoder_arch == "resnet101_embeddings":
+            n_features = 2048
+            encoder = nn.Identity()
 
         else:
             raise NotImplementedError(
