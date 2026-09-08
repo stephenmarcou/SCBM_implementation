@@ -710,9 +710,10 @@ def get_MNIST_planted_cov_datasets(
 
     removed = list(_cfg_get(config, "removed_concepts", []) or [])
 
-    os.makedirs(data_path, exist_ok=True)
-    mnist_train = MNIST(root=data_path, train=True, download=True)
-    mnist_test = MNIST(root=data_path, train=False, download=True)
+    mnist_root = os.path.join(data_path, "MNIST_ADD_COV")
+    os.makedirs(mnist_root, exist_ok=True)
+    mnist_train = MNIST(root=mnist_root, train=True, download=True)
+    mnist_test = MNIST(root=mnist_root, train=False, download=True)
 
     pools = _build_class_pools(mnist_train.targets)
     train_pools, val_pools = _split_train_val_pools(pools, val_percent, seed=seed + 7)
@@ -873,9 +874,10 @@ def load_saved_MNIST_add_cov_data(config, log_file=None):
 
     # Same root as get_MNIST_planted_cov_datasets, so a saved split reuses the
     # exact same on-disk MNIST cache as a plain generate-on-the-fly run.
+    mnist_root = os.path.join(data_path, "MNIST_ADD_COV")
     mnist_by_source = {
-        "train": MNIST(root=data_path, train=True, download=True),
-        "test": MNIST(root=data_path, train=False, download=True),
+        "train": MNIST(root=mnist_root, train=True, download=True),
+        "test": MNIST(root=mnist_root, train=False, download=True),
     }
 
     datasets = []
