@@ -19,3 +19,4 @@ inter_strategy: 'hard' # Interventions are performed by setting the concept to 0
 # --------------------------
 training_mode: 'joint' # Optimization method of CEMs is joint training
 embedding_size: 16 # Embedding size per concept for CEMs
+p_int: 0.0 # RandInt: per-concept probability of substituting the ground-truth value during training (Espinosa Zarlenga et al., 2022, use 0.25). 0.0 disables training-time interventions

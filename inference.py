@@ -228,6 +228,14 @@ def run(config):
     state_dict = torch.load(saved_model_path, map_location=device)
     print(f"Loaded model state dict from {saved_model_path}")
     model.to(device)
+    # Drop checkpoint keys the current model doesn't define (e.g. vestigial params from an
+    # older architecture, unused in forward) while still loading strictly against what's left,
+    # so a genuinely missing/shape-mismatched key still raises.
+    model_keys = set(model.state_dict().keys())
+    stale_keys = [k for k in state_dict if k not in model_keys]
+    if stale_keys:
+        print(f"Ignoring stale checkpoint keys not used by the current model: {stale_keys}")
+        state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
     model.load_state_dict(state_dict)
     model.eval()
 

@@ -167,6 +167,17 @@ def create_experiment_path(config):
     elif config.save_name is not None:
         ex_name = config.save_name + "_" + ex_name
 
+    # CBM, CEM and AR all share config.model.model == "cbm", so their runs land in one
+    # experiments/cbm/<dataset>/ pile and concept_learning is what tells them apart.
+    # For CEM p_int goes in too: whether the run was trained on interventions decides
+    # whether its intervention curve is comparable to the other models'.
+    if config.model.model == "cbm":
+        concept_learning = config.model.get("concept_learning")
+        if concept_learning == "embedding":
+            ex_name = f"cem_p_int_{config.model.p_int}_" + ex_name
+        elif concept_learning in ("hard", "soft"):
+            ex_name = f"{concept_learning}_cbm_" + ex_name
+
     if config.hyperparameter_search:
         config.experiment_dir = join(config.experiment_dir, "hyperparameter_search")
     

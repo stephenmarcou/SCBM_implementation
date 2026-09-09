@@ -93,6 +93,40 @@ class IntCEMMNISTEncoder(nn.Module):
 
     def forward(self, x):
         return self.encoder(x)
+    
+
+
+    # def __init__(self, in_channels=2, output_dim=128):
+    #     super().__init__()
+    #     m = 32
+
+    #     self.encoder = nn.Sequential(
+    #         nn.Conv2d(in_channels, m, kernel_size=3, padding="same"),
+    #         nn.BatchNorm2d(m),
+    #         nn.LeakyReLU(),
+    #         nn.MaxPool2d((2, 2)),                       # 28 -> 14
+
+    #         nn.Conv2d(m, m, kernel_size=3, padding="same"),
+    #         nn.MaxPool2d((2, 2)),                       # 14 -> 7
+    #         nn.BatchNorm2d(m),
+    #         nn.LeakyReLU(),
+
+    #         nn.Conv2d(m, m, kernel_size=3, padding="same"),
+    #         nn.BatchNorm2d(m),
+    #         nn.LeakyReLU(),
+    #         nn.MaxPool2d((2, 2)),                       # 7 -> 3
+
+    #         nn.Conv2d(m, m, kernel_size=3, padding="same"),
+    #         nn.BatchNorm2d(m),
+    #         nn.LeakyReLU(),
+    #                                                     # final pool removed
+
+    #         nn.Flatten(),                               # [B, 32, 3, 3]
+    #         nn.Linear(m * 3 * 3, output_dim),           # 288 -> 128
+    #     )
+
+    # def forward(self, x):
+    #     return self.encoder(x)
 
 
 
@@ -1020,6 +1054,7 @@ class CBM(nn.Module):
                 self.num_epochs = config_model.t_epochs
         elif self.concept_learning == "embedding":
             self.CEM_embedding = config_model.embedding_size
+            self.p_int = config_model.p_int
 
         # Architectures
         # Encoder h(.)
@@ -1067,9 +1102,14 @@ class CBM(nn.Module):
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
         if self.concept_learning == "embedding":
-            print(
-                "Please be aware that our implementation of CEMs is without training on interventions! This is because we would deem this an unfair comparison to our method that is also not trained on interventions. Still, be careful when using this CEM code for derivative works"
-            )
+            if self.p_int > 0:
+                print(
+                    f"CEM is being trained with RandInt (p_int={self.p_int}). Note that SCBM and the other baselines are not trained on interventions, so intervention curves are not a like-for-like comparison. Set model.p_int=0 for the intervention-free CEM."
+                )
+            else:
+                print(
+                    "Please be aware that our implementation of CEMs is without training on interventions! This is because we would deem this an unfair comparison to our method that is also not trained on interventions. Still, be careful when using this CEM code for derivative works"
+                )
             self.positive_embeddings = nn.ModuleList(
                 [
                     nn.Sequential(
@@ -1267,9 +1307,28 @@ class CBM(nn.Module):
                     for i in range(self.num_concepts)
                 ]
 
+                # RandInt: on a random subset of concepts, mix the embeddings with the
+                # ground-truth value instead of the predicted probability. c_prob itself is
+                # left untouched, so the concept loss still sees the unintervened predictions.
+                if self.training and self.p_int > 0 and c_true is not None:
+                    int_mask = torch.bernoulli(
+                        torch.full(
+                            (c_true.shape[0], self.num_concepts),
+                            self.p_int,
+                            device=c_true.device,
+                        )
+                    )
+                    c_mix = [
+                        int_mask[:, i : i + 1] * c_true[:, i : i + 1].float()
+                        + (1 - int_mask[:, i : i + 1]) * c_prob[i]
+                        for i in range(self.num_concepts)
+                    ]
+                else:
+                    c_mix = c_prob
+
                 # Final concept embedding
                 z_prob = [
-                    c_prob[i] * c_p[i] + (1 - c_prob[i]) * c_n[i]
+                    c_mix[i] * c_p[i] + (1 - c_mix[i]) * c_n[i]
                     for i in range(self.num_concepts)
                 ]
                 z_prob = torch.cat([z_prob[i] for i in range(self.num_concepts)], dim=1)

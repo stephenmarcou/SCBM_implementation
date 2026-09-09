@@ -362,6 +362,11 @@ def train_one_epoch_cbm(
             concepts_pred_probs, target_pred_logits, concepts_hard = model(
                 batch_features, epoch, concepts_train_ar=concepts_true
             )
+        elif config.model.concept_learning == "embedding":
+            # CEM needs the ground truth for RandInt; ignored when model.p_int == 0
+            concepts_pred_probs, target_pred_logits, concepts_hard = model(
+                batch_features, epoch, c_true=concepts_true
+            )
         else:
             concepts_pred_probs, target_pred_logits, concepts_hard = model(
                 batch_features, epoch
