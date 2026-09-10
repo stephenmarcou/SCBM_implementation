@@ -115,7 +115,9 @@ def maybe_save_best_model(
 def create_experiment_path(config):
     # Set paths
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
-    ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
+    # Seed sits next to the timestamp rather than in front of the config prefixes, so runs
+    # stay grouped by configuration and a seed sweep is still readable within each group.
+    ex_name = "{}_seed_{}_{}".format(str(timestr), config.seed, uuid.uuid4().hex[:5])
     
     
     

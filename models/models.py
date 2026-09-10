@@ -62,43 +62,9 @@ class IntCEMMNISTEncoder(nn.Module):
     28x28 map reduces 28 -> 14 -> 7 -> 3 -> 1 before the projection.
     """
 
-    def __init__(self, in_channels=2, output_dim=128):
-        super().__init__()
-        m = 16
-
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, m, kernel_size=3, padding="same"),
-            nn.BatchNorm2d(m),
-            nn.LeakyReLU(),
-            nn.MaxPool2d((2, 2)),                       # 28 -> 14
-
-            nn.Conv2d(m, m, kernel_size=3, padding="same"),
-            nn.MaxPool2d((2, 2)),                       # 14 -> 7
-            nn.BatchNorm2d(m),
-            nn.LeakyReLU(),
-
-            nn.Conv2d(m, m, kernel_size=3, padding="same"),
-            nn.BatchNorm2d(m),
-            nn.LeakyReLU(),
-            nn.MaxPool2d((2, 2)),                       # 7 -> 3
-
-            nn.Conv2d(m, m, kernel_size=3, padding="same"),
-            nn.BatchNorm2d(m),
-            nn.LeakyReLU(),
-            nn.MaxPool2d((3, 3)),                       # 3 -> 1
-
-            nn.Flatten(),
-            nn.Linear(m * 1 * 1, output_dim),
-        )
-
-    def forward(self, x):
-        return self.encoder(x)
-    
-
-
     # def __init__(self, in_channels=2, output_dim=128):
     #     super().__init__()
-    #     m = 32
+    #     m = 16
 
     #     self.encoder = nn.Sequential(
     #         nn.Conv2d(in_channels, m, kernel_size=3, padding="same"),
@@ -119,14 +85,48 @@ class IntCEMMNISTEncoder(nn.Module):
     #         nn.Conv2d(m, m, kernel_size=3, padding="same"),
     #         nn.BatchNorm2d(m),
     #         nn.LeakyReLU(),
-    #                                                     # final pool removed
+    #         nn.MaxPool2d((3, 3)),                       # 3 -> 1
 
-    #         nn.Flatten(),                               # [B, 32, 3, 3]
-    #         nn.Linear(m * 3 * 3, output_dim),           # 288 -> 128
+    #         nn.Flatten(),
+    #         nn.Linear(m * 1 * 1, output_dim),
     #     )
 
     # def forward(self, x):
     #     return self.encoder(x)
+    
+
+
+    def __init__(self, in_channels=2, output_dim=128):
+        super().__init__()
+        m = 32
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, m, kernel_size=3, padding="same"),
+            nn.BatchNorm2d(m),
+            nn.LeakyReLU(),
+            nn.MaxPool2d((2, 2)),                       # 28 -> 14
+
+            nn.Conv2d(m, m, kernel_size=3, padding="same"),
+            nn.MaxPool2d((2, 2)),                       # 14 -> 7
+            nn.BatchNorm2d(m),
+            nn.LeakyReLU(),
+
+            nn.Conv2d(m, m, kernel_size=3, padding="same"),
+            nn.BatchNorm2d(m),
+            nn.LeakyReLU(),
+            nn.MaxPool2d((2, 2)),                       # 7 -> 3
+
+            nn.Conv2d(m, m, kernel_size=3, padding="same"),
+            nn.BatchNorm2d(m),
+            nn.LeakyReLU(),
+                                                        # final pool removed
+
+            nn.Flatten(),                               # [B, 32, 3, 3]
+            nn.Linear(m * 3 * 3, output_dim),           # 288 -> 128
+        )
+
+    def forward(self, x):
+        return self.encoder(x)
 
 
 
