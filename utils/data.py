@@ -166,7 +166,7 @@ def get_data(config_base, config, gen, log_file=None):
         pin_memory=True,
         generator=gen,
         drop_last=True,
-        persistent_workers=True,
+        persistent_workers=config.workers > 0,
     )
     val_loader = DataLoader(
         validset,
@@ -175,7 +175,7 @@ def get_data(config_base, config, gen, log_file=None):
         num_workers=config.workers,
         pin_memory=True,
         generator=gen,
-        persistent_workers=True,
+        persistent_workers=config.workers > 0,
     )
     test_loader = DataLoader(
         testset,

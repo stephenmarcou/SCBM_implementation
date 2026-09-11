@@ -55,6 +55,108 @@ def create_model(config):
 
 
 
+class PerChannelMNISTEncoder(nn.Module):
+    """
+    One shared single-digit CNN applied to each channel; features concatenated.
+
+    The alternative to IntCEMMNISTEncoder's layout, which treats the stacked digits
+    as channels of a single image and mixes them at conv1. Here each digit is read
+    by the same weights independently and owns a private output_dim // in_channels
+    slice of the feature vector, so per-digit fidelity does not have to be traded
+    against the other channels.
+
+    Empirically (encoder_capacity_check.ipynb §10b) this reads all four digits at
+    ~98% where the stacked encoder reaches ~80-91%, matching what a single-digit
+    encoder achieves reading one digit alone.
+    """
+
+    def __init__(self, in_channels=4, output_dim=128):
+        super().__init__()
+        assert output_dim % in_channels == 0
+        d = output_dim // in_channels
+        self.in_channels = in_channels
+        self.digit_net = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding="same"), nn.BatchNorm2d(32), nn.LeakyReLU(),
+            nn.MaxPool2d(2),                                        # 28 -> 14
+            nn.Conv2d(32, 64, 3, padding="same"), nn.BatchNorm2d(64), nn.LeakyReLU(),
+            nn.MaxPool2d(2),                                        # 14 -> 7
+            nn.Conv2d(64, 64, 3, padding="same"), nn.BatchNorm2d(64), nn.LeakyReLU(),
+            nn.MaxPool2d(2),                                        # 7 -> 3
+            nn.Flatten(),                                           # 64 * 9 = 576
+            nn.Linear(576, 128), nn.LeakyReLU(), nn.Dropout(0.25),
+            nn.Linear(128, d),
+        )
+
+    def forward(self, x):                                           # [B, C, 28, 28]
+        feats = [self.digit_net(x[:, k:k + 1]) for k in range(self.in_channels)]
+        return torch.cat(feats, dim=1)                              # [B, C * d]
+
+
+def load_and_maybe_freeze_encoder(module, config_model):
+    """
+    ============================ THE FREEZE HAPPENS HERE ============================
+
+    Optionally initialise `module.encoder` from a pretrained checkpoint and freeze it.
+    Called from every model class right after its encoder_arch branch.
+
+    Two config keys drive it (both default to off, so existing runs are unaffected):
+      model.pretrained_encoder_path : path to a state_dict saved for the encoder alone
+      model.freeze_encoder          : whether to hold those weights fixed
+
+    FREEZING IS TWO THINGS, NOT ONE. Setting requires_grad=False stops the optimiser
+    updating the weights -- create_optimizer already filters on requires_grad, so that
+    part is automatic. But `train_one_epoch` calls model.train(), which recurses into
+    every submodule and puts the encoder back into TRAIN mode. PerChannelMNISTEncoder
+    has three BatchNorm2d layers and a Dropout, so in train mode its running statistics
+    keep drifting and dropout stays active: the weights would be frozen while the
+    function the encoder computes kept changing, silently, every epoch.
+
+    So the flag below is also read by each model's train() override, which re-applies
+    .eval() to the encoder after any train() call. Both halves are required.
+    ================================================================================
+    """
+    path = getattr(config_model, "pretrained_encoder_path", None)
+    if path:
+        # Fail loudly and early: this path is NOT rewritten by update_config_paths(),
+        # so a path that works locally will not work on the cluster and vice versa.
+        # Cheaper to find out here than after the job has been queued.
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"model.pretrained_encoder_path does not exist: {path}\n"
+                "This path is used verbatim (no cluster rewriting), so pass an "
+                "absolute path when the checkpoint lives outside the repo."
+            )
+        state = torch.load(path, map_location="cpu")
+        module.encoder.load_state_dict(state)
+        print(f"Loaded pretrained encoder weights from {path}", flush=True)
+
+    # --- FREEZE POINT 1 of 2: weights ---
+    module._encoder_frozen = bool(getattr(config_model, "freeze_encoder", False))
+    if module._encoder_frozen:
+        for p in module.encoder.parameters():
+            p.requires_grad = False
+        module.encoder.eval()
+        n_frozen = sum(p.numel() for p in module.encoder.parameters())
+        print(f"Encoder FROZEN ({n_frozen:,} parameters held fixed, kept in eval mode)",
+              flush=True)
+
+
+def _encoder_aware_train(self, mode=True):
+    """
+    ============================ THE FREEZE HAPPENS HERE ============================
+    FREEZE POINT 2 of 2: train/eval mode.
+
+    Installed as `train` on each model class. nn.Module.train() recurses into every
+    submodule, so without this a frozen encoder is returned to train mode on every
+    epoch and its BatchNorm running stats drift. This puts it straight back to eval.
+    ================================================================================
+    """
+    nn.Module.train(self, mode)
+    if getattr(self, "_encoder_frozen", False):
+        self.encoder.eval()
+    return self
+
+
 class IntCEMMNISTEncoder(nn.Module):
     """
     IntCEM-style MNIST encoder, matching the reference implementation
@@ -232,6 +334,11 @@ class SCBM(nn.Module):
         elif self.encoder_arch == "mnist_encoder":
             n_features = 128
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
+
+        elif self.encoder_arch == "per_channel_mnist_encoder":
+            # Same 128-d output as mnist_encoder, so nothing downstream changes.
+            n_features = 128
+            self.encoder = PerChannelMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
             
             
         elif self.encoder_arch == "resnet101_embeddings":
@@ -240,6 +347,12 @@ class SCBM(nn.Module):
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
+
+        # ===================== THE FREEZE HAPPENS HERE (entry point) =====================
+        # Loads model.pretrained_encoder_path if set, and freezes when
+        # model.freeze_encoder is True. No-op for every existing config.
+        load_and_maybe_freeze_encoder(self, config_model)
+        # ================================================================================
 
         # Linear network to predict mu of concept distribution
         self.mu_concepts = nn.Linear(n_features, self.num_concepts, bias=True)
@@ -580,6 +693,11 @@ class SCBM_residual(nn.Module):
         elif self.encoder_arch == "mnist_encoder":
             n_features = 128
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
+
+        elif self.encoder_arch == "per_channel_mnist_encoder":
+            # Same 128-d output as mnist_encoder, so nothing downstream changes.
+            n_features = 128
+            self.encoder = PerChannelMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
             
             
         elif self.encoder_arch == "resnet101_embeddings":
@@ -588,6 +706,12 @@ class SCBM_residual(nn.Module):
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
+
+        # ===================== THE FREEZE HAPPENS HERE (entry point) =====================
+        # Loads model.pretrained_encoder_path if set, and freezes when
+        # model.freeze_encoder is True. No-op for every existing config.
+        load_and_maybe_freeze_encoder(self, config_model)
+        # ================================================================================
 
         # Linear network to predict mu of concept+residual distribution
         self.mu_concepts_residuals = nn.Linear(n_features, self.num_concepts + self.num_residuals, bias=True)
@@ -1094,6 +1218,11 @@ class CBM(nn.Module):
         elif self.encoder_arch == "mnist_encoder":
             n_features = 128
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
+
+        elif self.encoder_arch == "per_channel_mnist_encoder":
+            # Same 128-d output as mnist_encoder, so nothing downstream changes.
+            n_features = 128
+            self.encoder = PerChannelMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
             
         elif self.encoder_arch == "resnet101_embeddings":
             n_features = 2048
@@ -1101,6 +1230,12 @@ class CBM(nn.Module):
 
         else:
             raise NotImplementedError("ERROR: architecture not supported!")
+
+        # ===================== THE FREEZE HAPPENS HERE (entry point) =====================
+        # Loads model.pretrained_encoder_path if set, and freezes when
+        # model.freeze_encoder is True. No-op for every existing config.
+        load_and_maybe_freeze_encoder(self, config_model)
+        # ================================================================================
         if self.concept_learning == "embedding":
             if self.p_int > 0:
                 print(
@@ -1596,6 +1731,12 @@ class CBMResidual(nn.Module):
         # ---------------------------------------------------------
         self.encoder, n_features = self._build_encoder(config)
 
+        # ===================== THE FREEZE HAPPENS HERE (entry point) =====================
+        # _build_encoder returns the module rather than assigning it, so the freeze runs
+        # here, once self.encoder exists. Same two config keys as the other models.
+        load_and_maybe_freeze_encoder(self, config.model)
+        # ================================================================================
+
         # ---------------------------------------------------------
         # Independent residual encoder
         # ---------------------------------------------------------
@@ -1692,6 +1833,14 @@ class CBMResidual(nn.Module):
         elif self.encoder_arch == "mnist_encoder":
             n_features = 128
             encoder = IntCEMMNISTEncoder(
+                in_channels=config.data.num_covariates,
+                output_dim=n_features,
+            )
+
+        elif self.encoder_arch == "per_channel_mnist_encoder":
+            # Same 128-d output as mnist_encoder, so nothing downstream changes.
+            n_features = 128
+            encoder = PerChannelMNISTEncoder(
                 in_channels=config.data.num_covariates,
                 output_dim=n_features,
             )
@@ -1996,6 +2145,17 @@ class CBMResidual(nn.Module):
 
 
 
+
+
+# ======================= THE FREEZE HAPPENS HERE (mode enforcement) =======================
+# Attach the encoder-aware train() to every model class. Without this, model.train() in
+# train_one_epoch would return a frozen encoder to train mode each epoch and its BatchNorm
+# running statistics would drift -- weights frozen, function not. See
+# _encoder_aware_train and load_and_maybe_freeze_encoder above.
+for _cls in (SCBM, SCBM_residual, CBM, CBMResidual):
+    _cls.train = _encoder_aware_train
+del _cls
+# =========================================================================================
 
 class Identity(nn.Module):
     def __init__(self):

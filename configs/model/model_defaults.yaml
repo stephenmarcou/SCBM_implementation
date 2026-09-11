@@ -34,3 +34,21 @@ regression_task: False # Whether the task is regression or classification. If Tr
 
 # Multilabel task
 multilabel_task: False # Whether the task is multilabel classification or not. If True, the model will use a sigmoid activation for the output layer and binary cross-entropy loss. If False, the model will use a softmax activation for the output layer and cross-entropy loss.
+
+# --------------------------
+#   Pretrained encoder
+# --------------------------
+# Initialise the encoder from a checkpoint saved for the encoder alone (a state_dict
+# for just that module, e.g. experiments/backbones/<name>/encoder.pt as written by
+# encoder_capacity_check.ipynb §10b). null -> the usual random init.
+#
+# The checkpoint must match encoder_arch AND have been pretrained at the same
+# data.corruption_strength the run trains at -- otherwise frozen features are reading
+# an input distribution they were never fitted on.
+pretrained_encoder_path: null
+
+# Hold those weights fixed. This does two things (see load_and_maybe_freeze_encoder in
+# models/models.py): requires_grad=False so the optimiser skips them, AND the encoder is
+# pinned to eval mode so BatchNorm running stats and Dropout stop changing. Both are
+# required -- model.train() would otherwise undo the second every epoch.
+freeze_encoder: false
