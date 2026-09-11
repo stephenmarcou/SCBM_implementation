@@ -38,7 +38,11 @@ class CIFAR10_CBM_dataloader(datasets.CIFAR10):
 
 
 def get_CIFAR10_CBM_dataloader(datapath):
-    root = os.path.join(datapath, "CIFAR10")
+    # The folder is 'cifar10' on disk on both the laptop and the cluster; the capitalised
+    # spelling only ever resolved because macOS is case-insensitive, so it failed on Linux.
+    root = os.path.join(datapath, "cifar10")
+    if not os.path.isdir(root):
+        root = os.path.join(datapath, "CIFAR10")
     train_idxs = np.load(os.path.join(root, "train_idxs.npy"))
     val_idxs = np.load(os.path.join(root, "val_idxs.npy"))
     train_file = "c_train_percentile_threshold_bool.pt"
