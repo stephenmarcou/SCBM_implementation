@@ -12,6 +12,22 @@ from typing import Optional
 from utils.utils import numerical_stability_check
 
 
+def _inv_triangular(triang: Tensor) -> Tensor:
+    """Invert a batch of lower-triangular Cholesky factors.
+
+    torch.inverse() discards the triangular structure and runs a general batched LU.
+    On the cluster GPUs that dispatches to MAGMA's apply_lu_factor_batched_magma, which
+    faults with "CUDA error: misaligned address" for some (matrix size, batch, device)
+    combinations - seen on a 29x29 AwA2 run (9 concepts + 20 residuals) after 104 clean
+    epochs. A triangular solve against the identity is the same quantity, goes through
+    cuBLAS trsm instead, and is cheaper since it needs no pivoting.
+    """
+    eye = torch.eye(
+        triang.size(-1), device=triang.device, dtype=triang.dtype
+    ).expand_as(triang)
+    return torch.linalg.solve_triangular(triang, eye, upper=False)
+
+
 def create_loss(config):
     """
     Create and return a loss function based on the configuration.
@@ -230,7 +246,8 @@ class SCBLoss(nn.Module):
             if cov_not_triang:
                 prec_matrix = torch.inverse(c_triang_cov)
             else:
-                c_triang_inv = torch.inverse(c_triang_cov)
+                # c_triang_inv = torch.inverse(c_triang_cov)  # MAGMA batched LU -> misaligned address
+                c_triang_inv = _inv_triangular(c_triang_cov)
                 prec_matrix = torch.matmul(
                     torch.transpose(c_triang_inv, dim0=1, dim1=2), c_triang_inv
                 )
@@ -365,7 +382,8 @@ class SCBresLoss(nn.Module):
             if cov_not_triang:
                 prec_matrix = torch.inverse(c_triang_cov)
             else:
-                c_triang_inv = torch.inverse(c_triang_cov)
+                # c_triang_inv = torch.inverse(c_triang_cov)  # MAGMA batched LU -> misaligned address
+                c_triang_inv = _inv_triangular(c_triang_cov)
                 prec_matrix = torch.matmul(
                     torch.transpose(c_triang_inv, dim0=1, dim1=2), c_triang_inv
                 )

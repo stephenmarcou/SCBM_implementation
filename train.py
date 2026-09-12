@@ -772,7 +772,11 @@ def update_config_paths(config):
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(config: DictConfig):
     #print("Config:", config)
-    
+
+    # Route batched linalg through cuSOLVER rather than MAGMA, whose batched LU faults
+    # with "misaligned address" on some matrix sizes (see _inv_triangular in models/losses.py).
+    torch.backends.cuda.preferred_linalg_library("cusolver")
+
     check_cluster()
     update_config_paths(config)
     if config.incomplete and config.data.dataset in CUB_CONCEPT_DATASETS:
