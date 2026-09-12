@@ -164,7 +164,16 @@ def create_experiment_path(config):
         # belongs in the folder name rather than only in log.txt.
         if config.save_name is not None:
             ex_name = config.save_name + "_" + ex_name
-        ex_name = f"planted_{config.data.planted_function}_" + ex_name
+        # The exact-digit dataset plants nothing -- the hidden variable is the digit
+        # identity itself -- so it has no planted_function key. Fall back to the
+        # experiment name, which plays the same identifying role there.
+        planted = config.data.get("planted_function")
+        variant = (
+            f"planted_{planted}"
+            if planted is not None
+            else config.data.get("experiment", "mnist_add")
+        )
+        ex_name = f"{variant}_" + ex_name
 
     elif config.save_name is not None:
         ex_name = config.save_name + "_" + ex_name

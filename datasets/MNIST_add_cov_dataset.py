@@ -67,6 +67,11 @@ NUM_DIGITS = 2
 NUM_CLASSES = 19
 SPLIT_ROOT = "splits"
 DATA_ROOT_NAME = "MNIST_ADD_EXACT_DIGIT"
+# Raw MNIST is shared with the earlier MNIST-Add experiments, which all downloaded
+# it under MNIST_ADD_COV/ (torchvision then appends MNIST/raw). Reusing that cache
+# means nothing is downloaded on a compute node, while the splits written by this
+# experiment still live under DATA_ROOT_NAME and cannot collide with the old ones.
+MNIST_CACHE_NAME = "MNIST_ADD_COV"
 
 # These are fixed semantic groupings for the covariance analysis.
 CONCEPT_GROUPS = {
@@ -589,7 +594,7 @@ def get_MNIST_add_cov_datasets(
 
     digit_threshold = int(_cfg_get(config, "digit_threshold", 5))
     data_path = _cfg_get(config, "data_path", "./data")
-    root = os.path.join(data_path, DATA_ROOT_NAME)
+    root = os.path.join(data_path, MNIST_CACHE_NAME)
     os.makedirs(root, exist_ok=True)
 
     train_size = int(_cfg_get(config, "train_dataset_size", 12000))
@@ -768,7 +773,7 @@ def load_saved_MNIST_add_cov_data(config, log_file=None):
 
     requested_threshold = int(_cfg_get(config, "digit_threshold", 5))
     data_path = _cfg_get(config, "data_path", "./data")
-    mnist_root = os.path.join(data_path, DATA_ROOT_NAME)
+    mnist_root = os.path.join(data_path, MNIST_CACHE_NAME)
     mnist_by_source = {
         "train": MNIST(root=mnist_root, train=True, download=True),
         "test": MNIST(root=mnist_root, train=False, download=True),
