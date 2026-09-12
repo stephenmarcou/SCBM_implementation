@@ -473,6 +473,13 @@ def validate_one_epoch_scbm_residual(
     y_true_list = []
     c_true_list = []
     
+    # MNIST-Add-Cov only: the exact digit identities are the hidden concepts the
+    # bottleneck deliberately omits, so they have to travel with the dump. No
+    # other dataset carries them, and none of them save anything here.
+    save_oracle_digits = config.data.dataset == "MNIST-Add-Cov"
+    oracle_digits_list = []
+    img_code_list = []
+    
     cov_matrix_sum = None
     cov_matrix_count = 0
     cov_matrix_list = []
@@ -547,6 +554,10 @@ def validate_one_epoch_scbm_residual(
                 y_pred_list.append(target_pred_logits.cpu())
                 y_true_list.append(target_true.cpu())
                 c_true_list.append(concepts_true.cpu())
+                
+                if save_oracle_digits:
+                    oracle_digits_list.append(batch["exact_digits"].cpu())
+                    img_code_list.append(batch["img_code"].cpu())
                 
                 cov_detached = cov.detach()
 
@@ -697,6 +708,16 @@ def validate_one_epoch_scbm_residual(
         torch.save(cov_matrix_avg, save_path_cov)
         torch.save(cov_matrices_tensor, save_path_cov_per_sample)
 
+        if save_oracle_digits:
+            # img_code is the dataset index: (img_code == arange(N)).all() is the
+            # one-line check that these rows really are in dataset order.
+            oracle_digits_tensor = torch.cat(oracle_digits_list, dim=0)
+            img_code_tensor = torch.cat(img_code_list, dim=0)
+            save_path_oracle_digits = os.path.join(full_path, "exact_digits.pt")
+            save_path_img_code = os.path.join(full_path, "img_code.pt")
+            torch.save(oracle_digits_tensor, save_path_oracle_digits)
+            torch.save(img_code_tensor, save_path_img_code)
+
         print(f"Saved concepts residuals means to {save_path_concepts_residual_mean}")
         print(f"Saved concepts residuals stds to {save_path_concepts_residual_std}")
         print(f"Saved concepts residuals predicted probabilities means to {save_path_concepts_residual_probs_mean}")
@@ -710,6 +731,9 @@ def validate_one_epoch_scbm_residual(
         print(f"Saved c_true to {save_path_c_true}")
         print(f"Saved average covariance matrix to {save_path_cov}")
         print(f"Saved per-sample covariance matrices {tuple(cov_matrices_tensor.shape)} to {save_path_cov_per_sample}")
+        if save_oracle_digits:
+            print(f"Saved exact digits {tuple(oracle_digits_tensor.shape)} to {save_path_oracle_digits}")
+            print(f"Saved img_code {tuple(img_code_tensor.shape)} to {save_path_img_code}")
 
 
     

@@ -775,7 +775,9 @@ def main(config: DictConfig):
 
     # Route batched linalg through cuSOLVER rather than MAGMA, whose batched LU faults
     # with "misaligned address" on some matrix sizes (see _inv_triangular in models/losses.py).
-    torch.backends.cuda.preferred_linalg_library("cusolver")
+    # CUDA-only: a CPU/MPS build has no cuSOLVER and this raises rather than being ignored.
+    if torch.cuda.is_available():
+        torch.backends.cuda.preferred_linalg_library("cusolver")
 
     check_cluster()
     update_config_paths(config)
