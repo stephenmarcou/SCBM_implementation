@@ -65,20 +65,25 @@ removed_concepts: []
 # -------------------------------------------------
 #                   Image corruption
 # -------------------------------------------------
-# Kept from your current covariance setup. Corrupt BOTH digits symmetrically so
-# any difference between the two concept groups cannot be explained simply by
-# one group receiving noisier inputs.
+# Clean images, train and test alike.
 #
-# For a pure task/debug sanity check, temporarily set corruption='none' and
-# strength=0.0. For the covariance experiment, retain uncertainty so Sigma does
-# not trivially collapse on perfectly readable MNIST images.
-corruption: 'gaussian'
-corruption_strength: 0.5
+# Note what this costs: Sigma(x) is amortized from the image, so on perfectly
+# readable MNIST the concept posteriors sharpen, the Sigma diagonal collapses
+# toward zero, and the concept-residual cross-block Sigma[0:6, 6:8] becomes a
+# 0/0 ratio with little to read off. Check Sigma[A,A] is comfortably above zero
+# before interpreting any cross-block entry.
+#
+# To reintroduce uncertainty, set corruption/test_corruption back to 'gaussian'
+# with strength 0.5. Keep corruption_channels: 'all' whenever they are non-zero --
+# corrupting only digit 1 would make "digit 1 couples to the residual more than
+# digit 2" an artifact of which channel got noised.
+corruption: 'none'
+corruption_strength: 0.0
 corruption_probability: 1.0
 corruption_channels: 'all'
 
-test_corruption: 'gaussian'
-test_corruption_strength: 0.5
+test_corruption: 'none'
+test_corruption_strength: 0.0
 test_corruption_probability: 1.0
 
 # -------------------------------------------------
