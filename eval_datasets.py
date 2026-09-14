@@ -306,7 +306,10 @@ def train(config):
     
     # Prepare logging and experiment directory
     timestr = time.strftime("%Y-%m-%d_%H-%M-%S")
-    ex_name = "{}_{}".format(str(timestr), uuid.uuid4().hex[:5])
+    # Seed sits next to the timestamp, same as create_experiment_path in train.py: nothing
+    # else in the run folder or in log.txt records it, so a seed sweep over one split is
+    # otherwise indistinguishable on disk.
+    ex_name = "{}_seed_{}_{}".format(str(timestr), config.seed, uuid.uuid4().hex[:5])
     if config.data.dataset != "synthetic_res_scbm" and config.data.dataset != "multiclass_synthetic" and config.data.dataset != "multilabel_synthetic":
         pkl_file_dir = config.data.pkl_file_dir.strip("/") if config.data.pkl_file_dir else "complete"
         ex_name = pkl_file_dir + "_" + ex_name
