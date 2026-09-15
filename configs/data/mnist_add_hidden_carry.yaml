@@ -5,6 +5,11 @@ defaults:
   - data_defaults  # Inherit data_defaults arguments
 
 dataset: 'MNIST-Add-Cov'  # Must match the dataset name used in utils/data.py
+# `experiment` below is also what picks the generator module: utils/data.py's
+# _mnist_add_cov_module routes exact_digit_sum to datasets/MNIST_add_cov_dataset.py,
+# planted_* to MNIST_add_cov_dataset_planted.py and every name in this file to
+# MNIST_add_cov_dataset_hidden.py. So +data=mnist_add_hidden_carry reaches this
+# design without touching the exact-digit pathway of +data=mnist_add.
 
 # --------------------------
 #    Experiment selector

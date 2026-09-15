@@ -70,6 +70,8 @@ class PerChannelMNISTEncoder(nn.Module):
     encoder achieves reading one digit alone.
     """
 
+    FEATURES_PER_DIGIT = 32
+
     def __init__(self, in_channels=4, output_dim=128):
         super().__init__()
         assert output_dim % in_channels == 0
@@ -336,8 +338,11 @@ class SCBM(nn.Module):
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
 
         elif self.encoder_arch == "per_channel_mnist_encoder":
-            # Same 128-d output as mnist_encoder, so nothing downstream changes.
-            n_features = 128
+            # 32 features per digit, so 4 channels give the same 128-d output as mnist_encoder
+            # and a 5-channel input (the planted design) gives 160 instead of failing the
+            # divisibility assert. The per-digit slice width is what the shared digit_net's
+            # last layer is sized by, so checkpoints trained at one channel count load at another.
+            n_features = PerChannelMNISTEncoder.FEATURES_PER_DIGIT * config.data.num_covariates
             self.encoder = PerChannelMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
             
             
@@ -695,8 +700,11 @@ class SCBM_residual(nn.Module):
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
 
         elif self.encoder_arch == "per_channel_mnist_encoder":
-            # Same 128-d output as mnist_encoder, so nothing downstream changes.
-            n_features = 128
+            # 32 features per digit, so 4 channels give the same 128-d output as mnist_encoder
+            # and a 5-channel input (the planted design) gives 160 instead of failing the
+            # divisibility assert. The per-digit slice width is what the shared digit_net's
+            # last layer is sized by, so checkpoints trained at one channel count load at another.
+            n_features = PerChannelMNISTEncoder.FEATURES_PER_DIGIT * config.data.num_covariates
             self.encoder = PerChannelMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
             
             
@@ -1220,8 +1228,11 @@ class CBM(nn.Module):
             self.encoder = IntCEMMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
 
         elif self.encoder_arch == "per_channel_mnist_encoder":
-            # Same 128-d output as mnist_encoder, so nothing downstream changes.
-            n_features = 128
+            # 32 features per digit, so 4 channels give the same 128-d output as mnist_encoder
+            # and a 5-channel input (the planted design) gives 160 instead of failing the
+            # divisibility assert. The per-digit slice width is what the shared digit_net's
+            # last layer is sized by, so checkpoints trained at one channel count load at another.
+            n_features = PerChannelMNISTEncoder.FEATURES_PER_DIGIT * config.data.num_covariates
             self.encoder = PerChannelMNISTEncoder(in_channels=config.data.num_covariates, output_dim=n_features)
             
         elif self.encoder_arch == "resnet101_embeddings":
@@ -1838,8 +1849,8 @@ class CBMResidual(nn.Module):
             )
 
         elif self.encoder_arch == "per_channel_mnist_encoder":
-            # Same 128-d output as mnist_encoder, so nothing downstream changes.
-            n_features = 128
+            # 32 features per digit: 128 for 4 channels, 160 for the 5-channel planted design.
+            n_features = PerChannelMNISTEncoder.FEATURES_PER_DIGIT * config.data.num_covariates
             encoder = PerChannelMNISTEncoder(
                 in_channels=config.data.num_covariates,
                 output_dim=n_features,

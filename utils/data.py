@@ -12,15 +12,40 @@ from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, get_CUB_dataloaders
 from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
 from datasets.awa2_dataset import get_AWA2_dataloaders
-from datasets.MNIST_add_cov_dataset import (
-    get_MNIST_add_cov_datasets,
-    load_saved_MNIST_add_cov_data,
-    save_MNIST_add_cov_data,
-)
+# MNIST-Add-Cov has one dataset name but several experiment designs, each in its own module
+# with the same get/save/load interface. `data.experiment` picks the module (see
+# _mnist_add_cov_module), so +data=mnist_add, +data=mnist_add_hidden_carry and
+# +data=mnist_planted_cov all reach their own generator without touching each other.
+from datasets import MNIST_add_cov_dataset as mnist_exact_digit_module
+from datasets import MNIST_add_cov_dataset_hidden as mnist_hidden_module
+from datasets import MNIST_add_cov_dataset_planted as mnist_planted_module
 from datasets.cifar10_dataset import get_CIFAR10_CBM_dataloader
 from datasets.synthetic_dataset_res_scbm import get_synthetic_datasets_res_scbm, load_saved_synthetic_data, save_synthetic_data
 
 from utils.utils import numerical_stability_check
+
+
+def _mnist_add_cov_module(config):
+    """Pick the MNIST-Add-Cov generator module from `data.experiment`.
+
+    exact_digit_sum (configs/data/mnist_add.yaml)            -> datasets/MNIST_add_cov_dataset.py
+    planted_* (configs/data/mnist_planted_cov.yaml)          -> datasets/MNIST_add_cov_dataset_planted.py
+    everything else: original, hidden_xor, hidden_carry,
+    hidden_diff, hidden_carry_swap, hidden_carry_null
+    (configs/data/mnist_add_hidden_carry.yaml)               -> datasets/MNIST_add_cov_dataset_hidden.py
+
+    A missing key means the exact-digit experiment, which is the only design whose yaml
+    predates the selector. The hidden and planted modules validate the name themselves, so
+    a typo still fails loudly there. Spell planted variants out in full: the short aliases
+    'swap', 'diff' and 'null' are claimed by the hidden module.
+    """
+    experiment = str(config.get("experiment", "exact_digit_sum") or "exact_digit_sum")
+    experiment = experiment.strip().lower().replace("-", "_")
+    if experiment == "exact_digit_sum":
+        return mnist_exact_digit_module
+    if experiment.startswith("planted"):
+        return mnist_planted_module
+    return mnist_hidden_module
 
 
 def get_data(config_base, config, gen, log_file=None):
@@ -125,19 +150,20 @@ def get_data(config_base, config, gen, log_file=None):
             config, config_base.incomplete
         )
     elif config.dataset == "MNIST-Add-Cov":
-        print("MNIST-Add-Cov DATASET")
+        mnist_module = _mnist_add_cov_module(config)
+        print(f"MNIST-Add-Cov DATASET ({mnist_module.__name__}, experiment={config.get('experiment')})")
         if config.data_dir_name is not None:
             # Explicit train/val/test folders on disk: same samples on every
             # machine, independent of the run seed and of numpy/torch versions.
-            trainset, validset, testset = load_saved_MNIST_add_cov_data(
+            trainset, validset, testset = mnist_module.load_saved_MNIST_add_cov_data(
                 config, log_file=log_file
             )
         else:
-            trainset, validset, testset = get_MNIST_add_cov_datasets(
+            trainset, validset, testset = mnist_module.get_MNIST_add_cov_datasets(
                 config, config_base.incomplete, seed=config_base.seed, log_file=log_file
             )
             if config.save_data:
-                save_MNIST_add_cov_data(
+                mnist_module.save_MNIST_add_cov_data(
                     config, trainset, validset, testset, log_file=log_file
                 )
     elif config.dataset == "cifar10":
