@@ -473,10 +473,13 @@ def validate_one_epoch_scbm_residual(
     y_true_list = []
     c_true_list = []
     
-    # MNIST-Add-Cov only: the exact digit identities are the hidden concepts the
-    # bottleneck deliberately omits, so they have to travel with the dump. No
-    # other dataset carries them, and none of them save anything here.
+    # MNIST-Add-Cov only: the digit identities are the hidden information the
+    # bottleneck deliberately omits, so they travel with the dump. The exact-digit
+    # dataset exposes them as batch["exact_digits"], the hidden-carry and planted
+    # datasets as batch["digit_labels"]; the key is picked from the first batch, so
+    # a MNIST design without either simply saves nothing here instead of crashing.
     save_oracle_digits = config.data.dataset == "MNIST-Add-Cov"
+    oracle_digits_key = None
     oracle_digits_list = []
     img_code_list = []
     
@@ -556,8 +559,13 @@ def validate_one_epoch_scbm_residual(
                 c_true_list.append(concepts_true.cpu())
                 
                 if save_oracle_digits:
-                    oracle_digits_list.append(batch["exact_digits"].cpu())
-                    img_code_list.append(batch["img_code"].cpu())
+                    if oracle_digits_key is None:
+                        oracle_digits_key = next(
+                            (k for k in ("exact_digits", "digit_labels") if k in batch), ""
+                        )
+                    if oracle_digits_key:
+                        oracle_digits_list.append(batch[oracle_digits_key].cpu())
+                        img_code_list.append(batch["img_code"].cpu())
                 
                 cov_detached = cov.detach()
 
@@ -708,12 +716,15 @@ def validate_one_epoch_scbm_residual(
         torch.save(cov_matrix_avg, save_path_cov)
         torch.save(cov_matrices_tensor, save_path_cov_per_sample)
 
+        save_oracle_digits = save_oracle_digits and bool(oracle_digits_key)
         if save_oracle_digits:
             # img_code is the dataset index: (img_code == arange(N)).all() is the
             # one-line check that these rows really are in dataset order.
+            # Saved under the batch key's name: exact_digits.pt (exact-digit design,
+            # [N, 2]) or digit_labels.pt (carry / planted designs, [N, num_covariates]).
             oracle_digits_tensor = torch.cat(oracle_digits_list, dim=0)
             img_code_tensor = torch.cat(img_code_list, dim=0)
-            save_path_oracle_digits = os.path.join(full_path, "exact_digits.pt")
+            save_path_oracle_digits = os.path.join(full_path, f"{oracle_digits_key}.pt")
             save_path_img_code = os.path.join(full_path, "img_code.pt")
             torch.save(oracle_digits_tensor, save_path_oracle_digits)
             torch.save(img_code_tensor, save_path_img_code)
@@ -732,7 +743,7 @@ def validate_one_epoch_scbm_residual(
         print(f"Saved average covariance matrix to {save_path_cov}")
         print(f"Saved per-sample covariance matrices {tuple(cov_matrices_tensor.shape)} to {save_path_cov_per_sample}")
         if save_oracle_digits:
-            print(f"Saved exact digits {tuple(oracle_digits_tensor.shape)} to {save_path_oracle_digits}")
+            print(f"Saved {oracle_digits_key} {tuple(oracle_digits_tensor.shape)} to {save_path_oracle_digits}")
             print(f"Saved img_code {tuple(img_code_tensor.shape)} to {save_path_img_code}")
 
 
