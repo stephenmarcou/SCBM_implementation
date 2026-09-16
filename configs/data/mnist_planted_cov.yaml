@@ -112,7 +112,7 @@ removed_concepts: []
 # readable from d5 -- if it were, the concepts would add nothing on top of the image and
 # the optimal cross-block would be zero. Tune so a residual-only probe of X lands around
 # 0.80-0.85 accuracy.
-corruption: 'gaussian'   # none | gaussian | blur | occlusion
+corruption: 'gaussian'   # none | gaussian | blur | occlusion | mask (strength = blanking probability; see module docstring)
 corruption_strength: 0.5
 
 # concept_corruption_strength corrupts channels 1-4 (A, B, D1, D2), all four on the same

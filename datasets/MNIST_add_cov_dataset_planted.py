@@ -69,6 +69,18 @@ terms so parents and distractors stay comparable. Mild is right here (aim for
 coherent-sampling mechanism alive, but too much reopens the memorisation and
 copy-a-concept failure modes. Default 0.0.
 
+`corruption='mask'` is the cleanest of the modes for the covariance question.
+With probability `strength` the whole channel is replaced by a blank (all-zero)
+image, otherwise it is left untouched, so a sample is either fully informative
+or carries nothing on that channel: no reader can train through it the way it
+does through Gaussian noise. Masking X alone only moves the dependency into the
+residual *mean* (A and B are still read exactly, so P(X | A, B) is a single
+Bernoulli the encoder can emit). The cross-block of Sigma is only needed on
+samples where X *and* a parent are both unknown, i.e. jointly masked, which
+happens at rate `corruption_strength * concept_corruption_strength` per parent.
+D1 and D2 are masked at the same rate and serve as the control. Each sample
+reports which channels were blanked in `channel_mask`.
+
 Corruption is drawn deterministically per (sample, channel) from `seed`, so a
 split is reproducible across machines; `fingerprint()` hashes the pixels of a
 probe subset to prove it.
@@ -386,6 +398,12 @@ def _apply_corruption(
         kernel = max(3, min(int(2 * round(2 * sigma) + 1), 13))
         return TF.gaussian_blur(image, kernel_size=[kernel, kernel], sigma=[sigma, sigma])
 
+    if corruption == "mask":
+        # strength is the masking probability; a masked channel is a blank digit.
+        if torch.rand(1, generator=generator).item() < float(strength):
+            return torch.zeros_like(image)
+        return image
+
     if corruption == "occlusion":
         side = int(round(28 * float(strength)))
         if side <= 0:
@@ -399,7 +417,7 @@ def _apply_corruption(
 
     raise ValueError(
         f"Unknown corruption={corruption!r}. "
-        "Use 'none', 'gaussian', 'blur' or 'occlusion'."
+        "Use 'none', 'gaussian', 'blur', 'occlusion' or 'mask'."
     )
 
 
@@ -616,6 +634,7 @@ class MNISTPlantedCovDataset(Dataset):
 
     def __getitem__(self, index: int):
         images = []
+        channel_mask = torch.zeros(self.num_digits, dtype=torch.bool)
         for channel in range(self.num_digits):
             img = self._load_mnist_tensor(self.source_indices[index, channel])
             corruption, strength = self._channel_corruption(channel)
@@ -625,6 +644,8 @@ class MNISTPlantedCovDataset(Dataset):
                 g = torch.Generator()
                 g.manual_seed(self.seed * 1_000_003 + int(index) + channel * 7_000_003)
                 img = _apply_corruption(img, corruption, strength, generator=g)
+                # A blanked channel is exactly zero; a real digit never is.
+                channel_mask[channel] = corruption == "mask" and not bool(img.any())
             images.append(img)
 
         features = torch.cat(images, dim=0)                       # [num_digits, 28, 28]
@@ -642,6 +663,10 @@ class MNISTPlantedCovDataset(Dataset):
             "removed_concepts": all_observed[self.removed_concept_idx],
             "X": hidden[1],
             "digit_labels": torch.from_numpy(self.digit_labels_all[index]).long(),
+            # Which channels were blanked by corruption='mask' (all False otherwise).
+            # The backbone pretraining skips the digit loss on these; the analysis
+            # splits its readouts by them.
+            "channel_mask": channel_mask,
         }
 
 
@@ -672,11 +697,15 @@ def get_MNIST_planted_cov_datasets(
     kappa                          [0, 1], default 0.9   (0 = null control)
     num_covariates                 >= 5, default 5
 
-    corruption                     none | gaussian | blur | occlusion
+    corruption                     none | gaussian | blur | occlusion | mask
     corruption_strength            channel 5 only; tune so the residual reads X
-                                   at roughly 0.80-0.85
+                                   at roughly 0.80-0.85. For 'mask' it is the
+                                   probability that channel 5 is blanked.
     concept_corruption             defaults to `corruption`
-    concept_corruption_strength    channels 1-4; mild (~0.93-0.95 concept acc)
+    concept_corruption_strength    channels 1-4; mild (~0.93-0.95 concept acc).
+                                   For 'mask', the per-channel blanking rate;
+                                   X and a parent are jointly masked at
+                                   corruption_strength * this rate.
 
     test_corruption_strength       defaults to corruption_strength
     test_concept_corruption_strength
