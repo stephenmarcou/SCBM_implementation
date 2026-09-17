@@ -118,6 +118,10 @@ def create_experiment_path(config):
     # Seed sits next to the timestamp rather than in front of the config prefixes, so runs
     # stay grouped by configuration and a seed sweep is still readable within each group.
     ex_name = "{}_seed_{}_{}".format(str(timestr), config.seed, uuid.uuid4().hex[:5])
+    # Learning rate goes in front of the timestamp for every dataset and model: it is the
+    # one optimisation knob that changed between otherwise identical runs, and reading it
+    # off `ls` beats opening each log.txt. `g` formatting keeps 0.001 and 0.0001 readable.
+    ex_name = "lr_{:g}_".format(config.model.learning_rate) + ex_name
     
     
     
