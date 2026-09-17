@@ -174,6 +174,19 @@ EXPERIMENT_SPECS: Dict[str, Dict] = {
         "parents": ((0, +1), (1, -1)),
         "description": "X depends on A positively and B negatively",
     },
+    # Single-parent designs. With one parent P(X=1 | P) = 0.5 +/- kappa/4, so corr(P, X)
+    # is still kappa/2 and the concept-only ceiling is still 0.5 + kappa/4, but only one
+    # concept row can carry the dependence. Under the "AB" label this gives a three-way
+    # contrast in one run: A is parent + task bit, B is task bit only, D1/D2 neither
+    # (planted_single_a); or D1 is parent only and A/B task only (planted_single_d1).
+    "planted_single_a": {
+        "parents": ((0, +1),),
+        "description": "X depends on A only; B, D1, D2 are null",
+    },
+    "planted_single_d1": {
+        "parents": ((2, +1),),
+        "description": "X depends on D1 only; A, B, D2 are null",
+    },
 }
 
 DEFAULT_EXPERIMENT = "planted_parents"
@@ -185,6 +198,8 @@ def _normalize_experiment(experiment: Optional[str]) -> str:
         "parents": "planted_parents",
         "swap": "planted_swap",
         "diff": "planted_diff",
+        "single_a": "planted_single_a",
+        "single_d1": "planted_single_d1",
         "null": "planted_parents",      # the null is kappa=0, not a variant
     }
     name = aliases.get(name, name)

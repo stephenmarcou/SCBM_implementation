@@ -30,8 +30,14 @@ dataset: 'MNIST-Add-Cov'  # Must match the dataset name used in utils/data.py
 #                        corr(A,X) = +kappa/2, corr(B,X) = -kappa/2 -- tests whether the
 #                        cross-block recovers sign, not just membership.
 #
+# 'planted_single_a'  P(X=1|A)     = 0.5 + kappa/4 * (2A - 1)      one parent: corr(A,X) = kappa/2,
+#                        B, D1, D2 null. Under 'AB' this contrasts parent+task (A), task-only (B)
+#                        and neither (D1, D2) in one run.
+# 'planted_single_d1' P(X=1|D1)    = 0.5 + kappa/4 * (2D1 - 1)     one parent that is task-irrelevant
+#                        under 'AB'; A, B task-only; D2 neither.
+#
 # Aliases accepted by the loader: 'parents' -> planted_parents, 'swap' -> planted_swap,
-# 'diff' -> planted_diff. There is no separate null-control experiment: kappa=0 is the null.
+# 'diff' -> planted_diff, 'single_a' -> planted_single_a, 'single_d1' -> planted_single_d1. There is no separate null-control experiment: kappa=0 is the null.
 experiment: 'planted_parents'
 
 # Strength of the planted dependence, in [0, 1]. kappa=0: X independent of every concept
