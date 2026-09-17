@@ -55,8 +55,15 @@ planted_function: ${data.experiment}
 # Fixed by the generator, not a free choice: 4 concepts (A, B, D1, D2), 8 task classes.
 # The loader rewrites these to match the actual generated split (fewer if
 # removed_concepts is non-empty), so these values are documentation, not a contract.
-num_classes: 8
+num_classes: 8       # rewritten by the loader from label_code: 8 for "AB", 32 for "ABDD"
 num_concepts: 4
+
+# Which concepts are bits of the label (X is always the lowest bit, so X = y % 2):
+#   'AB'   y = 4A + 2B + X            (8 classes; original design, D1/D2 task-irrelevant)
+#   'ABDD' y = 16A + 8B + 4D1 + 2D2 + X  (32 classes; every concept a label bit, so the copy
+#          coupling L_int builds is the same on every row and parent-vs-nonparent
+#          differences in Sigma are generative). Backbones are reusable across codes.
+label_code: 'AB'
 num_residuals: 1     # Start with R=1; go to R=5 only after R=1 works
 
 # Digit images stacked as channels: the input is [num_covariates, 28, 28] and the

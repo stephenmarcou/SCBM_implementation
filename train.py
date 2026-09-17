@@ -173,6 +173,11 @@ def create_experiment_path(config):
             if planted is not None
             else config.data.get("experiment", "mnist_add")
         )
+        # The planted design also has a label code (AB: y = 4A+2B+X, 8 classes; ABDD:
+        # y = 16A+8B+4D1+2D2+X, 32 classes). It changes the head and the ceilings, so it
+        # goes in the folder name too: planted_<design>_<code>_...
+        if planted is not None:
+            variant += "_" + str(config.data.get("label_code", "AB")).upper()
         ex_name = f"{variant}_" + ex_name
 
     elif config.save_name is not None:
@@ -715,6 +720,17 @@ def check_mnist_add_data(config):
     if config.model.encoder_arch == "resnet18":
         print("MNIST-Add-Cov run: setting model.encoder_arch to 'mnist_encoder'")
         config.model.encoder_arch = "mnist_encoder"
+
+    # The planted design's label code decides the head width (8 classes for "AB",
+    # 32 for "ABDD"). Resolve it here for the same reason as above: the logged
+    # num_classes must be the one the model is built with. The generator also
+    # writes it back at load time, so the two always agree.
+    if str(config.data.get("experiment", "")).startswith("planted"):
+        from datasets.MNIST_add_cov_dataset_planted import num_classes_for_label_code
+        resolved = num_classes_for_label_code(config.data.get("label_code", "AB"))
+        if int(config.data.num_classes) != resolved:
+            print(f"MNIST-Planted-Cov run: label_code={config.data.get('label_code', 'AB')} -> data.num_classes {config.data.num_classes} -> {resolved}")
+            config.data.num_classes = resolved
 
 
 def check_awa2_encoder(config):

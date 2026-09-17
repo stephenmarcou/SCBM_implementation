@@ -13,7 +13,8 @@ One experiment family, three variants, one strength knob.
 
     hidden      X  = 1[d5 >= 5]        NEVER supervised
 
-    target      y  = 4*A + 2*B + X     8 classes
+    target      y  = 4*A + 2*B + X     8 classes   (label_code="AB", default)
+                y  = 16A + 8B + 4D1 + 2D2 + X   32 classes   (label_code="ABDD")
 
 d1..d4 are drawn independently and exactly balanced, so A, B, D1 and D2 are
 mutually uncorrelated. X is then drawn conditional on a chosen pair of those
@@ -120,7 +121,30 @@ CONCEPT_NAMES: Tuple[str, ...] = (
 ORACLE_NAMES: Tuple[str, ...] = ("A2::unused", "X::digit5_ge_5")
 
 NUM_DIGITS = 5
-NUM_CLASSES = 8
+NUM_CLASSES = 8                         # for the default label code "AB"; see LABEL_CODES
+
+# Which concepts are bits of the task label, and with what weight. X is always the
+# lowest bit, so X = y % 2 under every code.
+#   "AB"   : y = 4A + 2B + X                 (8 classes)  -- the original design. D1/D2 are
+#            task-irrelevant, which tests whether Sigma merely tracks task concepts.
+#   "ABDD" : y = 16A + 8B + 4D1 + 2D2 + X    (32 classes) -- every concept is a label bit
+#            with the same role, so the copy/task coupling the intervention loss builds is
+#            the same on every concept row and any parent-vs-nonparent difference in Sigma
+#            is the generative route alone.
+# Weights are over (A, B, D1, D2); X contributes 1.
+LABEL_CODES: Dict[str, Tuple[int, int, int, int]] = {
+    "AB":   (4, 2, 0, 0),
+    "ABDD": (16, 8, 4, 2),
+}
+DEFAULT_LABEL_CODE = "AB"
+
+
+def num_classes_for_label_code(label_code) -> int:
+    """Classes implied by a label code: 2 ** (1 + number of concept bits in the label)."""
+    code = str(label_code or DEFAULT_LABEL_CODE).upper()
+    if code not in LABEL_CODES:
+        raise ValueError(f"Unknown label_code={label_code!r}; use one of {sorted(LABEL_CODES)}")
+    return int(2 ** (1 + sum(1 for w in LABEL_CODES[code] if w > 0)))
 HIDDEN_CHANNEL = 4                      # d5, the channel X is read from
 CONCEPT_CHANNELS: Tuple[int, ...] = (0, 1, 2, 3)
 
@@ -442,7 +466,7 @@ class MNISTPlantedCovDataset(Dataset):
 
         features          [num_digits, 28, 28]   one digit per channel
         concepts          [4]                    A, B, D1, D2 (minus removed)
-        labels            scalar                 y = 4A + 2B + X
+        labels            scalar                 y = 4A + 2B + X  ("AB") or 16A+8B+4D1+2D2+X ("ABDD")
         hidden_concepts   [2]                    [unused, X] -- oracle only
         digit_labels      [num_digits]           the true digit identities
     """
@@ -462,6 +486,7 @@ class MNISTPlantedCovDataset(Dataset):
         num_covariates: Optional[int] = None,
         removed_concepts: Optional[List[int]] = None,
         manifest: Optional[Dict[str, np.ndarray]] = None,
+        label_code: str = DEFAULT_LABEL_CODE,
     ):
         """
         `manifest`, when given, is the dict written by `save_MNIST_add_cov_data`
@@ -486,7 +511,11 @@ class MNISTPlantedCovDataset(Dataset):
 
         self.observed_concept_names = list(CONCEPT_NAMES)
         self.oracle_concept_names = list(ORACLE_NAMES)
-        self.num_classes = NUM_CLASSES
+        self.label_code = str(label_code or DEFAULT_LABEL_CODE).upper()
+        if self.label_code not in LABEL_CODES:
+            raise ValueError(f"Unknown label_code={label_code!r}; use one of {sorted(LABEL_CODES)}")
+        self.label_weights = np.array(LABEL_CODES[self.label_code], dtype=np.int64)  # over (A, B, D1, D2)
+        self.num_classes = int(2 ** (1 + int((self.label_weights > 0).sum())))
         self.parent_idx = [i for i, _ in get_experiment_spec(self.experiment)["parents"]]
         self.nonparent_idx = [
             i for i in range(len(CONCEPT_NAMES)) if i not in self.parent_idx
@@ -531,7 +560,7 @@ class MNISTPlantedCovDataset(Dataset):
                 [np.zeros_like(x, dtype=np.float32), x.astype(np.float32)], axis=1
             )
             self.task_labels = (
-                4 * observed[:, 0] + 2 * observed[:, 1] + x
+                observed[:, :4].astype(np.int64) @ self.label_weights + x.astype(np.int64)
             ).astype(np.int64)
 
             # 4) MNIST images backing those identities.
@@ -556,19 +585,15 @@ class MNISTPlantedCovDataset(Dataset):
         Computed from the split rather than the 0.5 + kappa/4 formula, so it
         stays right if the generator ever changes.
         """
-        obs = self.observed_concepts
-        x = self.hidden_concepts[:, 1]
-        a, b = obs[:, 0] > 0.5, obs[:, 1] > 0.5
-
-        correct = 0.0
-        for av in (0, 1):
-            for bv in (0, 1):
-                cell = (a == bool(av)) & (b == bool(bv))
-                if not cell.any():
-                    continue
-                p = x[cell].mean()
-                correct += cell.sum() * max(p, 1.0 - p)
-        return float(correct / len(x))
+        # Majority label within each combination of the four concept bits. Under
+        # "AB" this reduces to the majority X per (A, B) cell; under "ABDD" the
+        # concepts fix every bit but X, so it is the majority X per full cell.
+        code = (self.observed_concepts[:, :4] > 0.5).astype(np.int64) @ np.array([8, 4, 2, 1])
+        correct = 0
+        for k in np.unique(code):
+            cell = code == k
+            correct += np.bincount(self.task_labels[cell]).max()
+        return float(correct / len(code))
 
     def planted_correlations(self) -> Dict[str, float]:
         """Realised corr(concept, X) on this split."""
@@ -601,6 +626,8 @@ class MNISTPlantedCovDataset(Dataset):
                 self.concept_corruption_strength,
             )
         )
+        if self.label_code != DEFAULT_LABEL_CODE:
+            spec += "|label_code=" + self.label_code     # default hashes stay byte-identical
         n_probe = min(self.dataset_size, 16)
         probe_idx = np.unique(np.linspace(0, self.dataset_size - 1, n_probe).astype(int))
         probe_pixels = torch.stack([self[int(i)]["features"] for i in probe_idx]).numpy()
@@ -712,6 +739,8 @@ def get_MNIST_planted_cov_datasets(
                                    defaults to concept_corruption_strength
 
     removed_concepts               indices to withhold from the bottleneck
+    label_code                     "AB" (default, y = 4A+2B+X, 8 classes) or
+                                   "ABDD" (y = 16A+8B+4D1+2D2+X, 32 classes); see LABEL_CODES
     """
     data_path = _cfg_get(config, "data_path", "./data")
     seed = int(_cfg_get(config, "data_seed", seed))
@@ -738,6 +767,7 @@ def get_MNIST_planted_cov_datasets(
     )
 
     removed = list(_cfg_get(config, "removed_concepts", []) or [])
+    label_code = str(_cfg_get(config, "label_code", DEFAULT_LABEL_CODE)).upper()
 
     mnist_root = os.path.join(data_path, "MNIST_ADD_COV")
     os.makedirs(mnist_root, exist_ok=True)
@@ -755,6 +785,7 @@ def get_MNIST_planted_cov_datasets(
         concept_corruption=concept_corruption,
         num_covariates=num_covariates,
         removed_concepts=removed,
+        label_code=label_code,
     )
 
     trainset = MNISTPlantedCovDataset(
@@ -772,6 +803,12 @@ def get_MNIST_planted_cov_datasets(
         corruption_strength=test_corruption_strength,
         concept_corruption_strength=test_concept_strength, **shared,
     )
+
+    # Same write-backs as the load-from-disk path, so num_classes follows the label
+    # code (8 for "AB", 32 for "ABDD") and the head / metrics are built to match.
+    sync_num_concepts(config, trainset, log_file=log_file)
+    sync_num_classes(config, trainset, log_file=log_file)
+    sync_num_covariates(config, trainset, log_file=log_file)
 
     log_split_fingerprints(
         {"train": trainset, "val": valset, "test": testset},
@@ -1095,7 +1132,8 @@ def summarize_dataset(dataset: MNISTPlantedCovDataset) -> None:
     print(f"Concepts exposed: {dataset.concept_names()}")
     print(f"Concept means {names}: {np.round(obs.mean(0), 4)}")
     print(f"P(X = 1) = {x.mean():.4f}   (0.5 by construction, any kappa)")
-    print(f"Task class counts: {np.bincount(dataset.task_labels, minlength=NUM_CLASSES)}")
+    print(f"Label code {dataset.label_code}: weights (A,B,D1,D2)={tuple(dataset.label_weights)} + X, {dataset.num_classes} classes")
+    print(f"Task class counts: {np.bincount(dataset.task_labels, minlength=dataset.num_classes)}")
 
     print("\nMarginal concept-X correlations (what the cross-block should recover):")
     expected = {}
@@ -1118,10 +1156,10 @@ def summarize_dataset(dataset: MNISTPlantedCovDataset) -> None:
             print(f"  A={av}, B={bv}: n={cell.sum():<6} P(X=1)={p:.4f}{flag}")
 
     ceiling = dataset.concept_only_ceiling()
-    # The ceiling uses A and B, which are the target's own bits. Under
-    # planted_swap the parents are D1/D2, so A and B say nothing about X and
-    # the ceiling stays at 0.5 whatever kappa is.
-    formula = 0.5 + dataset.kappa / 4 if 0 in dataset.parent_idx else 0.5
+    # The ceiling is the majority label per combination of all four concepts. A
+    # concept-only model sees the parents whichever design planted them, so the
+    # best guess of X is right with probability 0.5 + kappa/4 under every design.
+    formula = 0.5 + dataset.kappa / 4
     print(f"\nConcept-only task ceiling : {ceiling:.4f}   (expected {formula:.4f})")
     print(f"Residual headroom         : {1.0 - ceiling:.4f}")
     print("The residual-only probe of X must clear the ceiling before the")
