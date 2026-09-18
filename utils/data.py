@@ -10,8 +10,10 @@ from datasets.multiclass_synthetic_dataset import get_multiclass_datasets, save_
 from datasets.multilabel_synthetic_dataset import get_multilabel_datasets, load_saved_multilabel_data, save_multilabel_data
 from datasets.synthetic_dataset import get_synthetic_datasets
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_FAMILY_DATASETS, CUB_LABEL_ROOT, get_CUB_dataloaders
+from datasets.CUB_dataset import get_concept_groups_current_space as get_cub_concept_groups_current_space
 from datasets.Waterbirds_dataset import get_Waterbirds_dataloaders
 from datasets.awa2_dataset import get_AWA2_dataloaders
+from datasets.awa2_dataset import get_concept_groups_current_space as get_awa2_concept_groups_current_space
 # MNIST-Add-Cov has one dataset name but several experiment designs, each in its own module
 # with the same get/save/load interface. `data.experiment` picks the module (see
 # _mnist_add_cov_module), so +data=mnist_add, +data=mnist_add_hidden_carry and
@@ -302,6 +304,44 @@ def get_concept_groups(config):
 
     return concept_names_graph
 
+
+
+def get_intervention_concept_groups(config):
+    """
+    Concept groups for group-wise interventions, indexed in the run's own concept space.
+
+    CUB family: the 28 ATTRIBUTE_PARTS semantic groups of the 112 CBM attributes. AwA2: the
+    28 CEM/ECBM groups of the 85 predicates. On an incomplete run (config.incomplete) the
+    groups are re-indexed through the split's own record of what was removed (CUB: info.txt,
+    AwA2: concept_groups.json), so a group that lost every concept disappears and a partially
+    removed one keeps its survivors.
+
+    Returns an ordered {group_name: [concept_idx, ...]} that partitions
+    range(config.data.num_concepts). Anything else raises: a group policy that silently
+    skipped concepts would give a curve that never reaches full intervention.
+    """
+    dataset = config.data.dataset
+    incomplete = bool(config.get("incomplete", False))
+    if dataset in CUB_CONCEPT_DATASETS:
+        groups = get_cub_concept_groups_current_space(config.data, incomplete=incomplete)
+    elif dataset == "AwA2":
+        groups = get_awa2_concept_groups_current_space(config.data, incomplete=incomplete)
+    else:
+        raise NotImplementedError(
+            f"Group-wise interventions need a concept grouping, and none is defined for "
+            f"dataset {dataset!r} (available: {CUB_CONCEPT_DATASETS + ('AwA2',)})."
+        )
+
+    covered = sorted(idx for idxs in groups.values() for idx in idxs)
+    expected = list(range(config.data.num_concepts))
+    if covered != expected:
+        raise ValueError(
+            f"Concept groups for {dataset} must partition the {config.data.num_concepts} "
+            f"concepts of this run; they cover {covered} instead. For an incomplete run, "
+            f"check that data.pkl_file_dir ({config.data.get('pkl_file_dir')}) is the split "
+            f"the model was trained on."
+        )
+    return groups
 
 
 def make_analysis_loader(loader, batch_size, num_workers, pin_memory=True):

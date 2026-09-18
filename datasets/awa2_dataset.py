@@ -717,6 +717,32 @@ def get_attribute_parts_to_indices(config_data=None):
     return OrderedDict((k, list(v)) for k, v in CONCEPT_GROUPS.items())
 
 
+def get_concept_groups_current_space(config_data, incomplete=False):
+    """
+    CEM concept groups as indices into the concept space the model actually sees.
+
+    Complete run: CONCEPT_GROUPS over the 85 predicates. Incomplete run: the
+    concept_groups.json every incomplete set is saved with, already re-indexed by
+    _remap_concept_groups and holding non-empty groups only. A set without that file is
+    re-derived from info.json's selected concepts. Used by the `random_group` intervention
+    policy (utils/intervention.py); the CUB counterpart lives in datasets/CUB_dataset.py.
+    """
+    if not incomplete:
+        return get_attribute_parts_to_indices(config_data)
+    folder = get_incomplete_concept_set_path(config_data)
+    groups_path = os.path.join(folder, "concept_groups.json")
+    if os.path.exists(groups_path):
+        with open(groups_path, "r") as f:
+            groups = json.load(f, object_pairs_hook=OrderedDict)
+        return OrderedDict(
+            (name, [int(i) for i in idxs]) for name, idxs in groups.items() if idxs
+        )
+    with open(os.path.join(folder, "info.json"), "r") as f:
+        selected = json.load(f)["selected_concept_indices_original_space"]
+    _, new_groups = _remap_concept_groups(selected)
+    return new_groups
+
+
 def _next_incomplete_dataset_dir(config_data, mode_name):
     """Create a new numbered incomplete-data folder, similar to the CUB code."""
     root = _get_incomplete_root(config_data)

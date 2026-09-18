@@ -270,6 +270,17 @@ Key points:
 - `run_interventions=True` — intervention curves (writes `intervention_log.txt`). For
   `scbm_residual` this currently uses `intervene_scbm_residual_optimized` (the
   non-optimized `intervene_scbm_residual` is commented out).
+- `inference.inter_policy=random_group` — intervene on whole semantic concept groups instead
+  of single concepts: one random not-yet-intervened group per step (CUB family: the 28
+  `ATTRIBUTE_PARTS`; AwA2: the 28 CEM groups), so the curve has one point per group and
+  each log line also gives the mean number of concepts that step amounts to. On an
+  incomplete run the groups are re-indexed into the run's reduced concept space
+  (`get_intervention_concept_groups` in `utils/data.py`, via CUB's `info.txt` / AwA2's
+  `concept_groups.json`), so a fully removed group disappears and a partially removed one
+  keeps its survivors. The group is drawn per *batch*, because the SCBM strategies need
+  every sample in a batch to have the same number of intervened concepts. Writes
+  `intervention_log<split>_random_group.txt`, leaving the concept-wise log untouched.
+  Default `random` is the historical per-sample, one-concept-per-step curve.
 - `inference.tb_all_renders=True` (TravelingBirds only) — the full-render sweep. A normal
   run touches only 11788 of the 23576 rendered images, because `train_test_split_CUB`
   picks the image folder by split *name*: train/val read `TravelingBirds/train/`

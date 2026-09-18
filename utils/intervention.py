@@ -16,6 +16,7 @@ import numpy as np
 
 from pathlib import Path
 
+from utils.data import get_intervention_concept_groups
 from utils.minimize_constraint import minimize_constr
 from utils.utils import numerical_stability_check
 
@@ -84,6 +85,38 @@ def dump_intervention_predictions(
         f.write("\n".join(str(s["id"]) for s in samples) + "\n")
 
 
+def embed_conditional_moments(interv_mu, interv_cov, c_mask, num_extra=0):
+    """
+    Scatter the conditional moments of the non-intervened dimensions back to full size.
+
+    SCBM_Strategy.compute_intervention returns the mean and covariance of the D - k
+    non-intervened dimensions only, k being the number of intervened concepts in the batch
+    (D = num_concepts, plus num_residuals for a residual model, whose residual dimensions
+    are never intervened on). intervene_scbm / intervene_scbm_residual store them per batch
+    and concatenate over the evaluation set, which only works while k is the same in every
+    batch - not under the random_group policy, where each batch follows its own group
+    order. Returned as (batch, D) / (batch, D, D) tensors in the original dimension order
+    with NaN at the intervened positions, so batches always agree in shape. Relies on the
+    strategy leaving the non-intervened dimensions in ascending original order (it asserts
+    that) and on every row of the batch having the same k (the policies assert that).
+    """
+    batch_size = c_mask.shape[0]
+    keep = c_mask == 0
+    if num_extra:
+        extra = torch.ones(batch_size, num_extra, dtype=torch.bool, device=keep.device)
+        keep = torch.cat([keep, extra], dim=1)
+    full_dim = keep.shape[1]
+    full_mu = torch.full(
+        (batch_size, full_dim), float("nan"), dtype=interv_mu.dtype, device=interv_mu.device
+    )
+    full_mu[keep] = interv_mu.reshape(-1)
+    full_cov = torch.full(
+        (batch_size, full_dim, full_dim), float("nan"), dtype=interv_cov.dtype, device=interv_cov.device
+    )
+    full_cov[keep.unsqueeze(2) & keep.unsqueeze(1)] = interv_cov.reshape(-1)
+    return full_mu, full_cov
+
+
 def intervene_scbm(
     train_loader, test_loader, model, metrics, epoch, config, loss_fn, device, log_file=None,
     save_predictions_dir=None,
@@ -116,7 +149,7 @@ def intervene_scbm(
     #strategies = config.model.inter_strategy.split(",")
     
 
-    policies = ["random"]
+    policies = get_intervention_policies(config)
     strategies = [config.model.inter_strategy] # ["conf_interval_optimal"]
     print(f"Intervention strategy: {strategies}, policy: {policies}")
     with open(log_file, "a") as f:
@@ -124,7 +157,6 @@ def intervene_scbm(
     
     
     # I changed from min(config.data.num_concepts, 200)
-    num_interventions = min(config.data.num_concepts, config.model.max_interventions)
 
     # Intervening with different strategies
     first_intervention = True
@@ -134,8 +166,11 @@ def intervene_scbm(
         for policy in policies:
             intervention_dataset_base = []
             intervention_dataset_fixed = []
+            # Resolved outside the try below: a dataset without a concept grouping should
+            # fail loudly for random_group, not be swallowed as "not implemented for model".
+            intervention_policy = define_policy(policy, config)
+            num_interventions, unit, step_key = intervention_schedule(intervention_policy, config)
             try:
-                intervention_policy = define_policy(policy)
                 intervention_strategy = define_strategy(
                     strategy, train_loader, model, device, config
                 )
@@ -231,20 +266,20 @@ def intervene_scbm(
             # define which metrics will be plotted against it
             if first_intervention:
                 # define our custom x axis metric for wandb
-                wandb.define_metric("intervention/num_concepts_intervened")
+                wandb.define_metric(step_key)
                 first_intervention = False
             for i, (k, v) in enumerate(metrics_dict.items()):
                 wandb.define_metric(
                     f"intervention_{strategy}_{policy}/{k}",
-                    step_metric="intervention/num_concepts_intervened",
+                    step_metric=step_key,
                 )
                 wandb.log(
                     {
                         f"intervention_{strategy}_{policy}/{k}": v,
-                        "intervention/num_concepts_intervened": 0,
+                        step_key: 0,
                     }
                 )
-            prints = f"Intervention on {0} concepts: "
+            prints = format_intervention_step(0, unit)
             for key, value in metrics_dict.items():
                 prints += f"{key}: {value:.3f} "
             print(prints)
@@ -371,10 +406,15 @@ def intervene_scbm(
                             prec_loss=prec_loss,
                         )
 
+                        # Full-size, so batches with different numbers of intervened
+                        # concepts (random_group) can be concatenated below.
+                        c_interv_mu_full, c_interv_cov_full = embed_conditional_moments(
+                            c_interv_mu, c_interv_cov, concepts_mask_new
+                        )
                         updated_intervention_dataset.append(
                             [
-                                c_interv_mu.cpu(),
-                                c_interv_cov.cpu(),
+                                c_interv_mu_full.cpu(),
+                                c_interv_cov_full.cpu(),
                                 concepts_interv_probs.cpu(),
                                 concepts_mask_new.cpu(),
                             ]
@@ -387,10 +427,12 @@ def intervene_scbm(
                     wandb.log(
                         {
                             f"intervention_{strategy}_{policy}/{k}": v,
-                            "intervention/num_concepts_intervened": num_intervened,
+                            step_key: num_intervened,
                         }
                     )
-                prints = f"Intervention on {num_intervened} concepts: "
+                prints = format_intervention_step(
+                    num_intervened, unit, torch.cat([item[3] for item in updated_intervention_dataset], dim=0)
+                )
                 for key, value in metrics_dict.items():
                     prints += f"{key}: {value:.3f} "
                 print(prints)
@@ -468,13 +510,12 @@ def intervene_scbm_residual(
     #policies = config.model.inter_policy.split(",")
     #strategies = config.model.inter_strategy.split(",")
     
-    policies = ["random"]
+    policies = get_intervention_policies(config)
     #strategies = ["conf_interval_optimal"]
     strategies = ["emp_perc"]
     
     
     # I changed from min(config.data.num_concepts, 200)
-    num_interventions = min(config.data.num_concepts, config.model.max_interventions)
 
     # Intervening with different strategies
     first_intervention = True
@@ -484,8 +525,11 @@ def intervene_scbm_residual(
         for policy in policies:
             intervention_dataset_base = []
             intervention_dataset_fixed = []
+            # Resolved outside the try below: a dataset without a concept grouping should
+            # fail loudly for random_group, not be swallowed as "not implemented for model".
+            intervention_policy = define_policy(policy, config)
+            num_interventions, unit, step_key = intervention_schedule(intervention_policy, config)
             try:
-                intervention_policy = define_policy(policy)
                 intervention_strategy = define_strategy(
                     strategy, train_loader, model, device, config
                 )
@@ -593,20 +637,20 @@ def intervene_scbm_residual(
             # define which metrics will be plotted against it
             if first_intervention:
                 # define our custom x axis metric for wandb
-                wandb.define_metric("intervention/num_concepts_intervened")
+                wandb.define_metric(step_key)
                 first_intervention = False
             for i, (k, v) in enumerate(metrics_dict.items()):
                 wandb.define_metric(
                     f"intervention_{strategy}_{policy}/{k}",
-                    step_metric="intervention/num_concepts_intervened",
+                    step_metric=step_key,
                 )
                 wandb.log(
                     {
                         f"intervention_{strategy}_{policy}/{k}": v,
-                        "intervention/num_concepts_intervened": 0,
+                        step_key: 0,
                     }
                 )
-            prints = f"Intervention on {0} concepts: "
+            prints = format_intervention_step(0, unit)
             for key, value in metrics_dict.items():
                 prints += f"{key}: {value:.3f} "
             print(prints)
@@ -747,10 +791,16 @@ def intervene_scbm_residual(
                             prec_loss=prec_loss,
                         )
 
+                        # Full-size, so batches with different numbers of intervened
+                        # concepts (random_group) can be concatenated below.
+                        c_res_interv_mu_full, c_res_interv_cov_full = embed_conditional_moments(
+                            c_res_interv_mu, c_res_interv_cov, concepts_mask_new,
+                            num_extra=config.data.num_residuals,
+                        )
                         updated_intervention_dataset.append(
                             [
-                                c_res_interv_mu.cpu(),
-                                c_res_interv_cov.cpu(),
+                                c_res_interv_mu_full.cpu(),
+                                c_res_interv_cov_full.cpu(),
                                 concepts_residuals_interv_probs.cpu(),
                                 concepts_mask_new.cpu(),
                             ]
@@ -763,10 +813,12 @@ def intervene_scbm_residual(
                     wandb.log(
                         {
                             f"intervention_{strategy}_{policy}/{k}": v,
-                            "intervention/num_concepts_intervened": num_intervened,
+                            step_key: num_intervened,
                         }
                     )
-                prints = f"Intervention on {num_intervened} concepts: "
+                prints = format_intervention_step(
+                    num_intervened, unit, torch.cat([item[3] for item in updated_intervention_dataset], dim=0)
+                )
                 for key, value in metrics_dict.items():
                     prints += f"{key}: {value:.3f} "
                 print(prints)
@@ -834,13 +886,12 @@ def intervene_scbm_residual_optimized(
     # policies = config.model.inter_policy.split(",")
     # strategies = config.model.inter_strategy.split(",")
 
-    policies = ["random"]
+    policies = get_intervention_policies(config)
     strategies = [config.model.inter_strategy]
     print(f"Intervention strategy: {strategies}, policy: {policies}")
     with open(log_file, "a") as f:
         f.write(f"Intervention strategy: {strategies}, policy: {policies}\n")
 
-    num_interventions = min(config.data.num_concepts, config.model.max_interventions)
 
     first_intervention = True
 
@@ -852,8 +903,11 @@ def intervene_scbm_residual_optimized(
             #  concepts_true, target_true, concepts_mask]
             intervention_storage = []
 
+            # Resolved outside the try below: a dataset without a concept grouping should
+            # fail loudly for random_group, not be swallowed as "not implemented for model".
+            intervention_policy = define_policy(policy, config)
+            num_interventions, unit, step_key = intervention_schedule(intervention_policy, config)
             try:
-                intervention_policy = define_policy(policy)
                 intervention_strategy = define_strategy(
                     strategy, train_loader, model, device, config
                 )
@@ -963,22 +1017,22 @@ def intervene_scbm_residual_optimized(
             metrics_dict = metrics.compute(validation=True, config=config)
 
             if first_intervention:
-                wandb.define_metric("intervention/num_concepts_intervened")
+                wandb.define_metric(step_key)
                 first_intervention = False
 
             for i, (k, v) in enumerate(metrics_dict.items()):
                 wandb.define_metric(
                     f"intervention_{strategy}_{policy}/{k}",
-                    step_metric="intervention/num_concepts_intervened",
+                    step_metric=step_key,
                 )
                 wandb.log(
                     {
                         f"intervention_{strategy}_{policy}/{k}": v,
-                        "intervention/num_concepts_intervened": 0,
+                        step_key: 0,
                     }
                 )
 
-            prints = f"Intervention on {0} concepts: "
+            prints = format_intervention_step(0, unit)
             for key, value in metrics_dict.items():
                 prints += f"{key}: {value:.3f} "
             print(prints)
@@ -1136,11 +1190,13 @@ def intervene_scbm_residual_optimized(
                     wandb.log(
                         {
                             f"intervention_{strategy}_{policy}/{k}": v,
-                            "intervention/num_concepts_intervened": num_intervened,
+                            step_key: num_intervened,
                         }
                     )
 
-                prints = f"Intervention on {num_intervened} concepts: "
+                prints = format_intervention_step(
+                    num_intervened, unit, torch.cat(updated_masks, dim=0)
+                )
                 for key, value in metrics_dict.items():
                     prints += f"{key}: {value:.3f} "
                 print(prints)
@@ -1237,10 +1293,9 @@ def intervene_cbm(
         
     model.eval()
 
-    policies = ["random"]
+    policies = get_intervention_policies(config)
     strategies = [config.model.inter_strategy]
     
-    num_interventions = min(200, config.data.num_concepts)
     if config.model.model in ("cbm", "cbm_residual") and config.model.concept_learning in (
         "hard",
         "autoregressive",
@@ -1261,8 +1316,11 @@ def intervene_cbm(
         for policy in policies:
             intervention_dataset_base = []
 
+            # Resolved outside the try below: a dataset without a concept grouping should
+            # fail loudly for random_group, not be swallowed as "not implemented for model".
+            intervention_policy = define_policy(policy, config)
+            num_interventions, unit, step_key = intervention_schedule(intervention_policy, config)
             try:
-                intervention_policy = define_policy(policy)
                 intervention_strategy = define_strategy(
                     strategy, train_loader, model, device, config
                 )
@@ -1327,20 +1385,20 @@ def intervene_cbm(
             # define which metrics will be plotted against it
             if first_intervention:
                 # define our custom x axis metric for wandb
-                wandb.define_metric("intervention/num_concepts_intervened")
+                wandb.define_metric(step_key)
                 first_intervention = False
             for i, (k, v) in enumerate(metrics_dict.items()):
                 wandb.define_metric(
                     f"intervention_{strategy}_{policy}/{k}",
-                    step_metric="intervention/num_concepts_intervened",
+                    step_metric=step_key,
                 )
                 wandb.log(
                     {
                         f"intervention_{strategy}_{policy}/{k}": v,
-                        "intervention/num_concepts_intervened": 0,
+                        step_key: 0,
                     }
                 )
-            prints = f"Intervention on {0} concepts: "
+            prints = format_intervention_step(0, unit)
             for key, value in metrics_dict.items():
                 prints += f"{key}: {value:.3f} "
             print(prints)
@@ -1477,10 +1535,12 @@ def intervene_cbm(
                     wandb.log(
                         {
                             f"intervention_{strategy}_{policy}/{k}": v,
-                            "intervention/num_concepts_intervened": num_intervened,
+                            step_key: num_intervened,
                         }
                     )
-                prints = f"Intervention on {num_intervened} concepts: "
+                prints = format_intervention_step(
+                    num_intervened, unit, torch.cat(concepts_dataset_mask_new, dim=0)
+                )
                 for key, value in metrics_dict.items():
                     prints += f"{key}: {value:.3f} "
                 print(prints)
@@ -1509,7 +1569,55 @@ def intervene_cbm(
     return
 
 
-def define_policy(policy):
+def get_intervention_policies(config):
+    """
+    The intervention policy of this run, from inference.inter_policy (default "random").
+
+    One policy per run: inference.py names the intervention log after the policy, and the
+    analysis notebooks key a log by step, so two curves in one file would be unreadable.
+    """
+    inference_cfg = config.get("inference", None)
+    policy = "random" if inference_cfg is None else inference_cfg.get("inter_policy", "random")
+    policy = str(policy).strip()
+    if "," in policy:
+        raise ValueError(
+            f"inference.inter_policy takes a single policy per run, got {policy!r}. "
+            "Run inference.py once per policy; each writes its own intervention log."
+        )
+    return [policy]
+
+
+def intervention_schedule(intervention_policy, config):
+    """
+    Number of steps on the curve, what one step adds ("concepts" or "groups"), and the
+    wandb key of the x-axis. Concept-wise policies add one concept per step, capped by
+    model.max_interventions; the group policy adds one whole group per step.
+    """
+    if isinstance(intervention_policy, RandomGroupInterventionPolicy):
+        num_steps = min(intervention_policy.num_groups, config.model.max_interventions)
+        unit = "groups"
+    else:
+        num_steps = min(config.data.num_concepts, config.model.max_interventions)
+        unit = "concepts"
+    return num_steps, unit, f"intervention/num_{unit}_intervened"
+
+
+def format_intervention_step(num_intervened, unit, masks=None):
+    """
+    Prefix of a logged curve point.
+
+    "Intervention on <n> concepts: " is unchanged for the concept-wise policies - the analysis
+    notebooks parse that exact phrase. A group step additionally reports the mean number of
+    concepts it amounts to (groups differ in size), so a group curve can also be read on a
+    concept axis.
+    """
+    line = f"Intervention on {num_intervened} {unit}"
+    if unit != "concepts" and masks is not None:
+        line += f" (mean {masks.float().sum(1).mean().item():.1f} concepts)"
+    return line + ": "
+
+
+def define_policy(policy, config=None):
     """
     Return the intervention policy that determines on which concepts to intervene
 
@@ -1517,6 +1625,9 @@ def define_policy(policy):
         policy (str): The name of the intervention policy to use. Supported policies are:
                       - "random": Randomly selects concepts to intervene on.
                       - "prob_unc": Selects concepts based on uncertainty as measured by closeness to 0.5.
+                      - "random_group": Randomly selects whole semantic concept groups to intervene on
+                        (CUB family and AwA2; see get_intervention_concept_groups). Needs `config`.
+        config (DictConfig, optional): The run configuration; only needed for "random_group".
 
     Returns:
         object: An instance of the selected intervention policy class.
@@ -1529,11 +1640,88 @@ def define_policy(policy):
         intervention_policy = RandomSubsetInterventionPolicy()
     elif policy == "prob_unc":
         intervention_policy = ProbUncertaintyInterventionPolicy()
+    elif policy == "random_group":
+        if config is None:
+            raise ValueError("define_policy('random_group') needs the run config to build the concept groups.")
+        groups = get_intervention_concept_groups(config)
+        intervention_policy = RandomGroupInterventionPolicy(groups, config.data.num_concepts)
+        print(
+            f"Intervening on {len(groups)} concept groups "
+            f"(sizes {[len(idxs) for idxs in groups.values()]}): {list(groups)}"
+        )
     else:
         raise NotImplementedError("No such policy as", policy, "defined!")
 
     print("USING FOLLOWING POLICY:", intervention_policy.__class__.__name__)
     return intervention_policy
+
+
+class RandomGroupInterventionPolicy:
+    """
+    A policy that intervenes on complete concept groups, one randomly chosen group per step.
+
+    `groups` maps a group name to the concept indices (in the model's own concept space)
+    forming it, e.g. the 28 CUB ATTRIBUTE_PARTS or the 28 CEM AwA2 groups. Each step adds
+    every concept of one more group, so after k steps k whole groups are intervened on and
+    the curve's x-axis counts groups, not concepts.
+
+    The group is drawn per *batch*, not per sample. The SCBM strategies condition the
+    Gaussian on a block whose size they read off the first sample
+    (SCBM_Strategy.compute_intervention, ConfIntervalOptimalStrategy), so every sample in a
+    batch must carry the same number of intervened concepts - which, with groups of
+    different sizes, means the same groups. Batches are fixed across steps (shuffle=False
+    on the stored dataset), so each batch follows its own random group order and the curve
+    averages over as many orders as there are batches. The expected curve is the one a
+    per-sample order would give; only its variance is larger.
+    """
+
+    def __init__(self, groups, num_concepts):
+        if not groups:
+            raise ValueError("RandomGroupInterventionPolicy needs at least one concept group.")
+        self.group_names = list(groups.keys())
+        self.groups = [[int(i) for i in idxs] for idxs in groups.values()]
+        self.num_groups = len(self.groups)
+        # membership[g, c] == 1 iff concept c belongs to group g
+        membership = torch.zeros(self.num_groups, num_concepts)
+        for g, idxs in enumerate(self.groups):
+            membership[g, idxs] = 1.0
+        self.membership = membership
+        self.group_sizes = membership.sum(1)
+
+    def compute_intervention_mask(self, concepts_mask, **kwargs):
+        """
+        Add one not-yet-intervened group, the same for every sample of the batch.
+
+        Args:
+            concepts_mask (torch.Tensor): Which concepts are already intervened on, identical
+                                          across rows. Shape: (batch_size, num_concepts)
+
+        Returns:
+            torch.Tensor: The mask with one more complete group set to 1, updated in place.
+        """
+        if concepts_mask.shape[1] != self.membership.shape[1]:
+            raise ValueError(
+                f"Mask has {concepts_mask.shape[1]} concepts but the groups were built for "
+                f"{self.membership.shape[1]}."
+            )
+        if not torch.all(concepts_mask == concepts_mask[0]):
+            raise ValueError(
+                "random_group intervenes batch-wise, so every sample in a batch must share "
+                "the same intervention history; the rows of concepts_mask differ."
+            )
+        membership = self.membership.to(concepts_mask.device)
+        group_sizes = self.group_sizes.to(concepts_mask.device)
+
+        # A group counts as intervened on once all its concepts are masked (groups are disjoint).
+        done = (concepts_mask[0].float() @ membership.T) >= group_sizes
+        candidates = torch.nonzero(~done).squeeze(1)
+        if candidates.numel() == 0:
+            raise ValueError("Every concept group is already intervened on.")
+        chosen = candidates[torch.randint(candidates.numel(), (1,), device=candidates.device)]
+        concepts_mask[:, membership[chosen].squeeze(0).bool()] = 1
+
+        assert torch.all(concepts_mask.sum(1) == concepts_mask.sum(1)[0])
+        return concepts_mask
 
 
 class RandomSubsetInterventionPolicy:

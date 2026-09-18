@@ -138,15 +138,19 @@ def run(config):
 
 
     if config.run_interventions == True:
+        # Each policy gets its own log, so the group-wise curve of a run never overwrites its
+        # concept-wise one ('random' keeps the historical file names).
+        inter_policy = config.inference.get("inter_policy", "random")
+        policy_suffix = "" if inter_policy == "random" else f"_{inter_policy}"
         if tb_image_root is not None:
             # Keep the curve next to the c_mu/res_mu artifacts it was measured on, so a
             # <split>_bg_<root>/ folder is self-contained. The folder normally already exists
             # from an earlier inference run, but interventions can be run on their own.
             log_dir = experiment_path / eval_save_folder
             log_dir.mkdir(parents=True, exist_ok=True)
-            log_file = log_dir / "intervention_log.txt"
+            log_file = log_dir / f"intervention_log{policy_suffix}.txt"
         else:
-            log_file = experiment_path / f"intervention_log{split_suffix}.txt"
+            log_file = experiment_path / f"intervention_log{split_suffix}{policy_suffix}.txt"
         with open(log_file, "w") as f:
             f.write(f"Intervention log for experiment: {experiment_path}\n")
             f.write(f"Intervention split: {split_header}\n")

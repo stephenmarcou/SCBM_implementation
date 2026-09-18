@@ -25,6 +25,7 @@ Functions:
     get_CIFAR100_CBM_dataloader: Returns DataLoaders for training, validation, and testing splits.
 """
 
+import ast
 import ctypes
 import os
 import pickle
@@ -479,6 +480,58 @@ def get_attribute_parts_to_indices(config_data):
 
         return semantic_groups
  
+def read_incomplete_cub_removed_indices(config_data):
+    """
+    Attribute indices (in the complete 112-attribute space) removed by the configured
+    incomplete split, read from its info.txt.
+
+    `Removed attribute indices:` is the one line every generator has always written - group
+    mode, individual mode, and the folders that predate the explicit old->new mapping line
+    (which the two modes also name differently) - so the re-indexing is rebuilt from it
+    rather than parsed from a mapping line.
+    """
+    info_path = os.path.join(
+        config_data.data_path,
+        CUB_LABEL_ROOT,
+        config_data.incomplete_dir,
+        str(config_data.pkl_file_dir).strip("/"),
+        "info.txt",
+    )
+    with open(info_path, "r") as f:
+        for line in f:
+            if line.startswith("Removed attribute indices:"):
+                return sorted(int(i) for i in ast.literal_eval(line.split(":", 1)[1].strip()))
+    raise ValueError(f"{info_path} has no 'Removed attribute indices:' line.")
+
+
+def get_concept_groups_current_space(config_data, incomplete=False):
+    """
+    ATTRIBUTE_PARTS groups as indices into the concept space the model actually sees.
+
+    Complete run: get_attribute_parts_to_indices, the 28 groups over the 112 CBM attributes.
+    Incomplete run: the removed attributes are dropped and the survivors re-indexed exactly
+    as the generators re-index the pkls (survivors keep their relative order), so a group
+    that lost every attribute disappears and a partially removed one keeps its survivors.
+
+    Returns an ordered {group_name: [idx, ...]} of non-empty groups. Used by the
+    `random_group` intervention policy (utils/intervention.py).
+    """
+    groups = get_attribute_parts_to_indices(config_data)
+    if not incomplete:
+        return groups
+    removed = set(read_incomplete_cub_removed_indices(config_data))
+    old_to_new = {}
+    for old_idx in range(len(ATTRIBUTES_IDX_USED)):
+        if old_idx not in removed:
+            old_to_new[old_idx] = len(old_to_new)
+    remapped = {}
+    for name, idxs in groups.items():
+        kept = [old_to_new[i] for i in idxs if i in old_to_new]
+        if kept:
+            remapped[name] = kept
+    return remapped
+
+
 def create_random_incomplete_dataset_attr_groups(config_data, num_attribute_groups_remove=1):
     # mapping between attribute parts and attribute indices in the new 112 attribute space
     attribute_parts_indices_map = get_attribute_parts_to_indices(config_data)

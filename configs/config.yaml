@@ -30,6 +30,15 @@ inference:
                                        # afterwards - on Waterbirds, the four (bird, background) cells, where a background
                                        # shortcut and a concept-driven head are indistinguishable on the average.
                                        # ~50MB per 200-class run, negligible for a binary target. [True, False]
+  inter_policy: 'random' # What each intervention step adds ['random', 'random_group'].
+                         # 'random': one random not-yet-intervened concept per sample and step (the
+                         # historical curve, x-axis = number of concepts).
+                         # 'random_group': one complete semantic concept group per step, drawn at random
+                         # per batch (CUB family: the 28 ATTRIBUTE_PARTS; AwA2: the 28 CEM groups), so
+                         # the x-axis counts groups and each log line also reports the mean number of
+                         # concepts. On an incomplete run the groups are re-indexed through the split's
+                         # info file, so partially removed groups keep their surviving concepts. Writes
+                         # intervention_log<split>_random_group.txt next to the concept-wise log.
   eval_split: 'test' # Which split to evaluate (and intervene) on ['test', 'val', 'train']. 'val' is the in-distribution
                      # check for TravelingBirds, whose test split has different backgrounds than train/val.
                      # Non-'test' splits write to inference_log_<split>.txt / intervention_log_<split>.txt.
