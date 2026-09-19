@@ -326,6 +326,38 @@ Key points:
   The intervention *strategy* is still fitted on `train_loader` at its default root, which is
   what you want: fixed across both curves.
 
+- `inference.noise.type=salt_pepper|gaussian` (+ `inference.noise.amount`, `inference.noise.seed`)
+  — **post-hoc robustness check without retraining**, CUB family + Waterbirds. The evaluation
+  split is corrupted in [0,1] pixel space *after* CenterCrop/Resize and *before* the ImageNet
+  normalization (`datasets/noise.py`, hooked in via `build_records_loader` in `inference.py`),
+  so salt really is a white pixel and pepper a black one. `salt_pepper`: `amount` is the fraction
+  of pixels replaced, half white / half black, shared across RGB. `gaussian`: `amount` is the std
+  of additive noise in pixel units, clipped to [0,1]. The corruption is deterministic per
+  `(seed, sample index)`, independent of `workers`, so a complete and an incomplete checkpoint
+  swept with the same seed see identical corrupted images. Only the **evaluation loader** is
+  noisy: the intervention strategy is still fitted on the clean `train_loader`, and the run's
+  clean outputs are never overwritten — logs and artifacts get the suffix
+  `_noise_<type>_<amount>` (`inference_log_noise_salt_pepper_0.05.txt`,
+  `intervention_log_noise_salt_pepper_0.05[_random_group].txt`, artifacts under
+  `test_noise_salt_pepper_0.05/`), and the extra clean `train/`/`val/` analysis dumps are
+  skipped. Composes with `eval_split`, `inter_policy` and `tb_image_root` (suffix appended to
+  those names); mutually exclusive with `tb_all_renders`. Complete vs incomplete robustness
+  sweep, same checkpoint each, no retraining:
+
+  ```bash
+  for a in 0.02 0.05 0.1 0.2; do
+    sbatch scripts/inference.sh +model=SCBM_RES +data=CUB inference.ex_name=<complete_run> \
+      run_interventions=True inference.noise.type=salt_pepper inference.noise.amount=$a
+    sbatch scripts/inference.sh +model=SCBM_RES +data=CUB inference.ex_name=<incomplete_run> \
+      incomplete=True run_interventions=True inference.noise.type=salt_pepper inference.noise.amount=$a
+  done
+  ```
+
+  `scripts/inference.sh` is the sbatch wrapper around `inference.py` (same convention as
+  `scripts/train.sh`). Pass `model.inter_strategy=...` explicitly if the curve has to be
+  comparable to an existing one measured with a different strategy (see the docstring of
+  `scripts/rerun_interventions_with_preds.py`).
+
 ### Hyperparameter search
 
 - `hyperparameter_search=True` (in `train.py`) evaluates on the validation set at end

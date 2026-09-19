@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from models.models import create_model
 from datasets.CUB_dataset import CUB_CONCEPT_DATASETS, CUB_LABEL_ROOT, CUB_DatasetGenerator, get_CUB_transforms
 from datasets.Waterbirds_dataset import NUM_CUB_SPECIES, resolve_waterbirds_target
+from datasets.noise import NOISE_TYPES, NoisyImageDataset, split_normalization
 from datasets.awa2_dataset import get_incomplete_concept_set_path as get_incomplete_awa2_path
 
 def run(config):
@@ -95,6 +96,13 @@ def run(config):
                 "the sweep already covers every split against both image roots."
             )
 
+    # Input corruption for post-hoc robustness checks (datasets/noise.py). Applied to the
+    # evaluation loader only: the checkpoint is fixed and the intervention strategy is still
+    # fitted on the clean train split, so the noisy curve and the clean curve of the same run
+    # differ only in the pixels the model sees at evaluation time. None = clean evaluation.
+    noise = parse_noise_config(config, tb_all_renders)
+    noise_suffix = f"_noise_{noise['type']}_{noise['amount']:g}" if noise is not None else ""
+
 
     # --------------------------------
     # Folder naming to save artifacts and logs
@@ -110,11 +118,18 @@ def run(config):
         split_suffix = f"_{eval_split}"
     # Folder the c_mu/res_mu artifacts are dumped to; matches the split's own folder by default.
     eval_save_folder = f"{eval_split}_bg_{tb_image_root}" if tb_image_root is not None else eval_split
+    # A corrupted evaluation never overwrites the clean logs / artifacts of the same run.
+    split_suffix += noise_suffix
+    eval_save_folder += noise_suffix
     # Line recorded in both logs so a curve can be traced back to the background it was measured on.
     split_header = f"{eval_split}"
     if tb_image_root is not None:
         background = "class-correlated" if tb_image_root == "train" else "random"
         split_header += f" (images from TravelingBirds/{tb_image_root}/, {background} background)"
+    if noise is not None:
+        split_header += (
+            f" [noise: {noise['type']}, amount={noise['amount']:g}, seed={noise['seed']}]"
+        )
 
     #-------------------------------
     #   Logs
@@ -207,8 +222,13 @@ def run(config):
     # --------------------------------
     if tb_image_root is not None:
         # Same records (same birds, same labels), read from the other rendering.
-        eval_loader = build_tb_retargeted_loader(config, split_loader, tb_image_root)
+        eval_loader = build_tb_retargeted_loader(config, split_loader, tb_image_root, noise=noise)
         eval_records = eval_loader.dataset.data
+    elif noise is not None:
+        # Same records, same image root, deterministic test transform with the corruption
+        # inserted before normalization (see build_records_loader).
+        eval_loader = build_records_loader(config, split_loader.dataset.data, noise=noise)
+        eval_records = None
     else:
         # The train/val loaders are shuffled, so wrap the chosen split in an analysis loader to get a
         # deterministic, complete pass (matters because the saved c_mu/res_mu artifacts are order-dependent).
@@ -315,8 +335,9 @@ def run(config):
         # Here we run a full pass over the other splits to save their c_mu/res_mu artifacts too
         # eval_loader is popped from the analysis_loaders dict so it is not re-run
         # We do not do this if tb_image_root is set, as then we only want to do it for a very specific 
-        # split background combination
-        if config.data.save_concept_and_residual_channel and tb_image_root is None:
+        # split background combination. Nor under noise: the other splits would be dumped clean
+        # into the default train/, val/, test/ folders, re-deriving artifacts a clean run already made.
+        if config.data.save_concept_and_residual_channel and tb_image_root is None and noise is None:
             save_kwarg = (
                 "save_residual_meta_data_folder"
                 if config.model.model in ("scbm_residual", "cbm_residual")
@@ -418,19 +439,56 @@ def retarget_tb_records(records, data_path, image_root):
     return retargeted
 
 
-def build_tb_retargeted_loader(config, loader, image_root):
-    """Deterministic loader over a split's records, read from TravelingBirds/<image_root>/.
+def parse_noise_config(config, tb_all_renders):
+    """inference.noise as a plain dict {type, amount, seed}, or None for a clean evaluation."""
+    noise_cfg = config.inference.get("noise", None)
+    noise_type = noise_cfg.get("type", None) if noise_cfg is not None else None
+    if noise_type is None:
+        return None
+    if noise_type not in NOISE_TYPES:
+        raise ValueError(
+            f"inference.noise.type must be one of {list(NOISE_TYPES)} or null, got {noise_type!r}."
+        )
+    if config.data.dataset not in CUB_CONCEPT_DATASETS:
+        # The corruption is inserted into the CUB test transform, before its Normalize step.
+        raise ValueError(
+            f"inference.noise is only implemented for {list(CUB_CONCEPT_DATASETS)}, "
+            f"got data.dataset={config.data.dataset}."
+        )
+    if tb_all_renders:
+        raise ValueError(
+            "inference.noise and inference.tb_all_renders cannot be combined: the sweep is an "
+            "artifact-only pass over the clean renders."
+        )
+    return {
+        "type": noise_type,
+        "amount": float(noise_cfg.get("amount")),
+        "seed": int(noise_cfg.get("seed", 0)),
+    }
 
-    shuffle=False / drop_last=False plus the test-time transform, so the passes over the two
-    image roots are sample-aligned: row i is the same bird with the same labels, only the
-    background differs. That pairing is the point of the override - comparing a split against
-    itself on both backgrounds isolates the background, whereas val-vs-test also swaps the
-    photographers.
+
+def build_records_loader(config, records, noise=None):
+    """Deterministic loader over CUB-family records with the test-time transform.
+
+    shuffle=False / drop_last=False, so row i of every saved tensor is records[i] and two
+    passes over the same records (clean vs noisy, or the two TravelingBirds backgrounds) stay
+    sample-aligned. With `noise`, the corruption is applied in [0, 1] pixel space between the
+    geometric part of the test transform and its Normalize step (datasets/noise.py).
     """
-    records = retarget_tb_records(loader.dataset.data, config.data.data_path, image_root)
     _, test_transform = get_CUB_transforms()
+    if noise is None:
+        dataset = CUB_DatasetGenerator(records, transform=test_transform, cache=False)
+    else:
+        unnormalized, normalize = split_normalization(test_transform)
+        dataset = NoisyImageDataset(
+            CUB_DatasetGenerator(records, transform=unnormalized, cache=False),
+            noise_type=noise["type"],
+            amount=noise["amount"],
+            seed=noise["seed"],
+            normalize=normalize,
+        )
     return DataLoader(
-        CUB_DatasetGenerator(records, transform=test_transform, cache=False),
+        dataset,
         batch_size=config.model.val_batch_size,
         shuffle=False,
         drop_last=False,
@@ -438,6 +496,19 @@ def build_tb_retargeted_loader(config, loader, image_root):
         pin_memory=True,
         persistent_workers=config.workers > 0,
     )
+
+
+def build_tb_retargeted_loader(config, loader, image_root, noise=None):
+    """Deterministic loader over a split's records, read from TravelingBirds/<image_root>/.
+
+    shuffle=False / drop_last=False plus the test-time transform, so the passes over the two
+    image roots are sample-aligned: row i is the same bird with the same labels, only the
+    background differs. That pairing is the point of the override - comparing a split against
+    itself on both backgrounds isolates the background, whereas val-vs-test also swaps the
+    photographers. `noise` corrupts the retargeted images (see build_records_loader).
+    """
+    records = retarget_tb_records(loader.dataset.data, config.data.data_path, image_root)
+    return build_records_loader(config, records, noise=noise)
 
 
 def save_render_image_paths(records, folder_path):

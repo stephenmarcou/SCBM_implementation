@@ -51,6 +51,17 @@ inference:
                       # inference_log_<split>_bg_<root>.txt / intervention_log_<split>_bg_<root>.txt with
                       # artifacts under <split>_bg_<root>/ (same naming as tb_all_renders, with which it
                       # cannot be combined).
+  noise: # Post-hoc robustness check: corrupt the images of the *evaluation* split only (no retraining;
+         # the intervention strategy is still fitted on the clean train split). CUB family + Waterbirds.
+         # Applied in [0,1] pixel space after CenterCrop/Resize and before ImageNet normalization,
+         # deterministic per (seed, sample). Logs and artifacts get the suffix
+         # _noise_<type>_<amount>: inference_log_noise_salt_pepper_0.05.txt,
+         # intervention_log_noise_salt_pepper_0.05.txt, artifacts under test_noise_salt_pepper_0.05/.
+         # Cannot be combined with tb_all_renders; combines with eval_split and tb_image_root.
+    type: null # [null, 'salt_pepper', 'gaussian']. null = clean evaluation (historical behaviour).
+    amount: 0.05 # salt_pepper: fraction of pixels set to white/black (half each).
+                 # gaussian: std of additive noise in [0,1] pixel units (clipped).
+    seed: 0 # Seed of the corruption, independent of the global seed so two checkpoints see identical noise.
   tb_all_renders: False # TravelingBirds only: run every split against *both* image roots (train/ = class-correlated
                         # background, test/ = random background) instead of only the folder matching the split name.
                         # Covers all 23576 rendered images. Replaces the standard evaluation and the default
