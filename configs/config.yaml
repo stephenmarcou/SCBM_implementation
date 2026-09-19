@@ -59,7 +59,9 @@ inference:
          # intervention_log_noise_salt_pepper_0.05.txt, artifacts under test_noise_salt_pepper_0.05/.
          # Cannot be combined with tb_all_renders; combines with eval_split and tb_image_root.
     type: null # [null, 'salt_pepper', 'gaussian']. null = clean evaluation (historical behaviour).
-    amount: 0.05 # salt_pepper: fraction of pixels set to white/black (half each).
+    amount: 0.05 # salt_pepper: strength lambda of Espinosa Zarlenga et al. (ICML 2025, App. G): lambda/2 of the
+                 # pixel *channels* (R,G,B values, drawn with replacement) set to max, then lambda/2 set to min.
+                 # Their default is 0.1.
                  # gaussian: std of additive noise in [0,1] pixel units (clipped).
     seed: 0 # Seed of the corruption, independent of the global seed so two checkpoints see identical noise.
   tb_all_renders: False # TravelingBirds only: run every split against *both* image roots (train/ = class-correlated

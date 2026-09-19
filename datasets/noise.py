@@ -17,8 +17,14 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 # Amounts are interpreted per type:
-#   salt_pepper: fraction of pixels replaced (half by white, half by black), shared across
-#                the RGB channels so a corrupted pixel is fully white or fully black.
+#   salt_pepper: the "Salt & Pepper" corruption of Espinosa Zarlenga et al. (ICML 2025,
+#                "Avoiding Leakage Poisoning", Appendix G). amount is the strength lambda:
+#                a fraction lambda/2 of the *pixel channels* (individual R, G, B values, not
+#                whole pixels), drawn with replacement, is set to the maximum (1.0), then another
+#                lambda/2, drawn with replacement, is set to the minimum (0.0). At most lambda
+#                of the channel values are corrupted; a hit usually lands on one channel of a
+#                pixel, so the artefacts are coloured speckles rather than black/white dots.
+#                Their default strength is 0.1.
 #   gaussian:    standard deviation of additive N(0, amount^2) noise in [0, 1] pixel units,
 #                clipped back to [0, 1].
 NOISE_TYPES = ("salt_pepper", "gaussian")
@@ -27,12 +33,16 @@ NOISE_TYPES = ("salt_pepper", "gaussian")
 def apply_image_noise(img, noise_type, amount, generator):
     """Corrupt one image tensor (C, H, W) with values in [0, 1]. Returns a new tensor."""
     if noise_type == "salt_pepper":
-        # One mask per pixel, broadcast over channels.
-        corrupt = torch.rand(img.shape[-2:], generator=generator) < amount
-        salt = torch.rand(img.shape[-2:], generator=generator) < 0.5
-        img = torch.where(corrupt & salt, torch.ones_like(img), img)
-        img = torch.where(corrupt & ~salt, torch.zeros_like(img), img)
-        return img
+        # Channel-wise, with replacement, salt first and pepper second, as in the paper (the
+        # pepper pass overwriting some salt hits is why their images darken slightly).
+        flat = img.flatten().clone()
+        num_hits = int(round(amount / 2 * flat.numel()))
+        if num_hits > 0:
+            salt_idx = torch.randint(0, flat.numel(), (num_hits,), generator=generator)
+            flat[salt_idx] = 1.0
+            pepper_idx = torch.randint(0, flat.numel(), (num_hits,), generator=generator)
+            flat[pepper_idx] = 0.0
+        return flat.view_as(img)
     if noise_type == "gaussian":
         noise = torch.randn(img.shape, generator=generator) * amount
         return (img + noise).clamp_(0.0, 1.0)
@@ -73,7 +83,8 @@ class NoisyImageDataset(Dataset):
             raise ValueError(f"inference.noise.amount must be > 0, got {amount}.")
         if noise_type == "salt_pepper" and amount > 1:
             raise ValueError(
-                f"inference.noise.amount is a pixel fraction for salt_pepper, got {amount}."
+                f"inference.noise.amount is the corrupted channel fraction (lambda in [0, 1]) "
+                f"for salt_pepper, got {amount}."
             )
         self.dataset = dataset
         self.noise_type = noise_type

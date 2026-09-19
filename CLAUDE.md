@@ -330,8 +330,12 @@ Key points:
   — **post-hoc robustness check without retraining**, CUB family + Waterbirds. The evaluation
   split is corrupted in [0,1] pixel space *after* CenterCrop/Resize and *before* the ImageNet
   normalization (`datasets/noise.py`, hooked in via `build_records_loader` in `inference.py`),
-  so salt really is a white pixel and pepper a black one. `salt_pepper`: `amount` is the fraction
-  of pixels replaced, half white / half black, shared across RGB. `gaussian`: `amount` is the std
+  so salt really is a max value and pepper a min value. `salt_pepper` is the corruption of
+  Espinosa Zarlenga et al. (ICML 2025, "Avoiding Leakage Poisoning", App. G): `amount` is their
+  strength λ, a fraction λ/2 of the pixel *channels* (individual R/G/B values, drawn with
+  replacement) is set to the max, then another λ/2 to the min, so at most λ of the channel
+  values are corrupted and the artefacts are coloured speckles (their default λ = 0.1).
+  `gaussian`: `amount` is the std
   of additive noise in pixel units, clipped to [0,1]. The corruption is deterministic per
   `(seed, sample index)`, independent of `workers`, so a complete and an incomplete checkpoint
   swept with the same seed see identical corrupted images. Only the **evaluation loader** is
